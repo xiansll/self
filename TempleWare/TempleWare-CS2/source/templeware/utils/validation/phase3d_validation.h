@@ -78,7 +78,7 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     const std::uint32_t teamOffset =
         SchemaFinder::Get(hash_32_fnv1a_const("C_BaseEntity->m_iTeamNum"));
     const std::uint32_t desiredTeamOffset =
-        SchemaFinder::Get(hash_32_fnv1a_const("CBasePlayerController->m_iDesiredTeam"));
+        SchemaFinder::Get(hash_32_fnv1a_const("CCSPlayerController->m_iDesiredTeam"));
     const std::uint32_t localControllerOffset =
         SchemaFinder::Get(hash_32_fnv1a_const("CBasePlayerController->m_bIsLocalPlayerController"));
     const std::uint32_t pawnAliveOffset =
