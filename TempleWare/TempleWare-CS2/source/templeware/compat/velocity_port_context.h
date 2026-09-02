@@ -6,6 +6,7 @@
 // producers.
 
 #include <cstdint>
+#include <mutex>
 #include <shared_mutex>
 
 #include "velocity_rage_compat.h"
