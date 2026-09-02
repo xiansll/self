@@ -107,8 +107,8 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     }
 
     // Present is the proven-safe Phase 3 runtime validation path. The suspect
-    // FrameStageNotify detour stays disabled. Phase 3C now runs as one complete
-    // staged diagnostic suite; every risky read/call has ENTER/PASS/FAIL markers.
+    // FrameStageNotify detour stays disabled. Phase 3C is resolver-gated: no
+    // pointer-only local is dereferenced through TempleWare wrappers here.
     if (foundationInit)
     {
         static bool s_presentDiagnosticLogged = false;
@@ -135,7 +135,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
         if (!s_phase3cActiveLogged)
         {
-            FileLog::Log("[P3C] ACTIVE - FULL STAGED SDK VALIDATION SUITE");
+            FileLog::Log("[P3C] ACTIVE - SDK RESOLVER GATE (NO DEEP DEREF)");
             s_phase3cActiveLogged = true;
         }
 
@@ -184,8 +184,8 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                 s_lastPawn = snapshot.pawn;
             }
 
-            // Full P3C diagnostic run. The harness reruns only when the local
-            // pawn/controller pair changes, so normal Present frames stay quiet.
+            // Resolver-only P3C checkpoint. It reruns only when the selected
+            // pawn/controller pair changes and never enables S3-S7 by itself.
             Phase3C::Run(snapshot);
 
             if (snapshot.sdk_deref_safe)
