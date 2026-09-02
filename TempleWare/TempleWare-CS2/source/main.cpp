@@ -22,6 +22,7 @@
 #include "templeware/utils/localplayer/localplayer.h"
 #include "templeware/utils/validation/validation.h"
 #include "templeware/utils/validation/phase3c_validation.h"
+#include "templeware/compat/velocity_rage_compat.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -187,6 +188,11 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // Resolver-only P3C checkpoint. It reruns only when the selected
             // pawn/controller pair changes and never enables S3-S7 by itself.
             Phase3C::Run(snapshot);
+
+            // Phase 4 compatibility is allowed to progress in parallel at the
+            // type/adapter level, but the gate remains closed while Phase 3 has
+            // not proven SDK-safe local entity dereferences.
+            VelocityRageCompat::log_readiness(snapshot);
 
             if (snapshot.sdk_deref_safe)
             {
