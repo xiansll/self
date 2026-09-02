@@ -1,6 +1,7 @@
 #include "validation.h"
 #include <cstdio>
 #include <string>
+#include <atomic>
 #include "../../interfaces/interfaces.h"
 #include "../../utils/logging/log.h"
 #include "../../../cs2/entity/C_CSPlayerPawn/C_CSPlayerPawn.h"
@@ -9,8 +10,17 @@
 #include "../../../cs2/entity/handle.h"
 #include "../../interfaces/CGameEntitySystem/CGameEntitySystem.h"
 #include "../../utils/localplayer/localplayer.h"
+#include "../../utils/filelog/filelog.h"
 
 namespace Validation {
+
+static std::atomic<bool> s_phase3aBuildActiveLogged{false};
+static std::atomic<bool> s_foundationInitBeginLogged{false};
+static std::atomic<bool> s_interfacesReadyLogged{false};
+static std::atomic<bool> s_hookInitBeginLogged{false};
+static std::atomic<bool> s_framestageHookInstalledLogged{false};
+static std::atomic<bool> s_framestageFirstCallLogged{false};
+static std::atomic<bool> s_cacheUpdateFirstCallLogged{false};
 
 void Initialize() {
     g_counters.local_player_cache_updates.store(0);
@@ -25,11 +35,50 @@ void Initialize() {
     g_counters.vtable_failures.store(0);
     g_counters.pattern_resolutions.store(0);
     g_counters.pattern_failures.store(0);
+    
+    if (!s_phase3aBuildActiveLogged.exchange(true)) {
+        FileLog::Log("[Validation] PHASE3A BUILD ACTIVE");
+    }
+    FileLog::Log("[Validation] Diagnostic harness initialized");
     Logger::Log("[Validation] Diagnostic harness initialized", LogType::Info);
+}
+
+void LogFoundationInitBegin() {
+    if (!s_foundationInitBeginLogged.exchange(true)) {
+        FileLog::Log("[Validation] FOUNDATION INIT BEGIN");
+    }
+}
+
+void LogInterfacesReady() {
+    if (!s_interfacesReadyLogged.exchange(true)) {
+        FileLog::Log("[Validation] INTERFACES READY");
+    }
+}
+
+void LogHookInitBegin() {
+    if (!s_hookInitBeginLogged.exchange(true)) {
+        FileLog::Log("[Validation] HOOK INIT BEGIN");
+    }
+}
+
+void LogFramestageHookInstalled() {
+    if (!s_framestageHookInstalledLogged.exchange(true)) {
+        FileLog::Log("[Validation] FRAMESTAGE HOOK INSTALLED");
+    }
+}
+
+void LogFramestageFirstCall() {
+    if (!s_framestageFirstCallLogged.exchange(true)) {
+        FileLog::Log("[Validation] FRAMESTAGE FIRST CALL");
+    }
 }
 
 void OnLocalPlayerCacheUpdate(const LocalPlayerSnapshot& snapshot) {
     g_counters.local_player_cache_updates.fetch_add(1, std::memory_order_relaxed);
+
+    if (!s_cacheUpdateFirstCallLogged.exchange(true)) {
+        FileLog::Log("[Validation] CACHE UPDATE FIRST CALL");
+    }
 
     uint64_t current_tick = 0;
     if (I::GlobalVars) {
@@ -50,12 +99,14 @@ void OnLocalPlayerCacheUpdate(const LocalPlayerSnapshot& snapshot) {
             snapshot.is_valid()
         );
         Logger::Log(buf, LogType::Info);
+        FileLog::Log(buf);
     }
 }
 
 void OnLocalPlayerCacheReset() {
     g_counters.local_player_cache_resets.fetch_add(1, std::memory_order_relaxed);
     Logger::Log("[Validation] LocalPlayerCache reset", LogType::Warning);
+    FileLog::Log("[Validation] LocalPlayerCache reset");
 }
 
 void OnEntityHandleLookup(const CBaseHandle& handle, void* resolved_entity, const CBaseHandle& entity_handle) {
@@ -85,6 +136,7 @@ void OnEntityHandleLookup(const CBaseHandle& handle, void* resolved_entity, cons
             resolved_entity
         );
         Logger::Log(buf, LogType::Warning);
+        FileLog::Log(buf);
     } else if (!mismatch && g_rate_limiter.should_log(current_tick)) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
@@ -92,6 +144,7 @@ void OnEntityHandleLookup(const CBaseHandle& handle, void* resolved_entity, cons
             handle.index(), handle.serial_number(), resolved_entity
         );
         Logger::Log(buf, LogType::Info);
+        FileLog::Log(buf);
     }
 }
 
@@ -130,6 +183,7 @@ void OnEntityIdentityCheck(CEntityInstance* entity) {
             idx, serial, valid, schema_name.c_str(), handle_matches
         );
         Logger::Log(buf, valid && handle_matches ? LogType::Info : LogType::Warning);
+        FileLog::Log(buf);
     }
 }
 
@@ -142,6 +196,7 @@ void OnSceneNodeChainCheck(C_CSPlayerPawn* pawn) {
     if (!scene) {
         g_counters.scene_node_chain_failures.fetch_add(1, std::memory_order_relaxed);
         Logger::Log("[Validation] SceneNode: NULL", LogType::Warning);
+        FileLog::Log("[Validation] SceneNode: NULL");
         return;
     }
 
@@ -149,6 +204,7 @@ void OnSceneNodeChainCheck(C_CSPlayerPawn* pawn) {
     if (!skeleton) {
         g_counters.scene_node_chain_failures.fetch_add(1, std::memory_order_relaxed);
         Logger::Log("[Validation] SkeletonInstance: NULL", LogType::Warning);
+        FileLog::Log("[Validation] SkeletonInstance: NULL");
         return;
     }
 
@@ -156,6 +212,7 @@ void OnSceneNodeChainCheck(C_CSPlayerPawn* pawn) {
     if (!bone_cache) {
         g_counters.scene_node_chain_failures.fetch_add(1, std::memory_order_relaxed);
         Logger::Log("[Validation] BoneCache: NULL", LogType::Warning);
+        FileLog::Log("[Validation] BoneCache: NULL");
         return;
     }
 
@@ -171,6 +228,7 @@ void OnSceneNodeChainCheck(C_CSPlayerPawn* pawn) {
             scene, skeleton, bone_cache, skeleton->m_bone_count
         );
         Logger::Log(buf, LogType::Info);
+        FileLog::Log(buf);
     }
 }
 
@@ -192,6 +250,7 @@ void OnVTableCall(const char* name, uint32_t index, void* this_ptr, bool success
             name, index, this_ptr, success ? "OK" : "FAILED"
         );
         Logger::Log(buf, success ? LogType::Info : LogType::Error);
+        FileLog::Log(buf);
     }
 }
 
@@ -213,6 +272,7 @@ void OnPatternResolution(const char* name, void* resolved_addr, bool success) {
             name, resolved_addr, success ? "OK" : "FAILED"
         );
         Logger::Log(buf, success ? LogType::Info : LogType::Error);
+        FileLog::Log(buf);
     }
 }
 
@@ -238,6 +298,7 @@ void LogPeriodicSummary(uint64_t current_tick) {
         g_counters.pattern_failures.load()
     );
     Logger::Log(buf, LogType::Info);
+    FileLog::Log(buf);
 }
 
 } // namespace Validation

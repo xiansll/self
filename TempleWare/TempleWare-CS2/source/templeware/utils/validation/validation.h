@@ -54,6 +54,12 @@ inline RateLimiter g_rate_limiter(64);
 
 void Initialize();
 
+void LogFoundationInitBegin();
+void LogInterfacesReady();
+void LogHookInitBegin();
+void LogFramestageHookInstalled();
+void LogFramestageFirstCall();
+
 void OnLocalPlayerCacheUpdate(const LocalPlayerSnapshot& snapshot);
 void OnLocalPlayerCacheReset();
 

@@ -17,6 +17,8 @@
 #include "nerv/nerv_bridge.h"
 #include "templeware/globals/d3d11_globals.h"
 #include "templeware/globals/globals.h"
+#include "templeware/templeware.h"
+#include "templeware/utils/filelog/filelog.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -36,18 +38,7 @@ ID3D11RenderTargetView* mainRenderTargetView;
 ID3D11Device* D3D11::g_pDevice = nullptr;
 ID3D11DeviceContext* D3D11::g_pContext = nullptr;
 
-static void LogToFile(const char* msg)
-{
-    wchar_t path[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, path);
-    wcscat_s(path, MAX_PATH, L"TempleWare.log");
-    FILE* f = nullptr;
-    if (_wfopen_s(&f, path, L"a") == 0 && f)
-    {
-        fprintf(f, "%s\n", msg);
-        fclose(f);
-    }
-}
+TempleWare g_templeWare;
 
 LRESULT __stdcall WndProc(const HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -66,6 +57,7 @@ LRESULT __stdcall WndProc(const HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 }
 
 bool init = false;
+bool foundationInit = false;
 HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 {
     if (!init)
@@ -90,12 +82,12 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             ImGui_ImplDX11_Init(g_pDevice, g_pContext);
 
             init = true;
-            LogToFile("overlay init complete");
+            FileLog::Log("overlay init complete");
 
             if (Chams::Initialize())
-                LogToFile("chams init ok");
+                FileLog::Log("chams init ok");
             else
-                LogToFile("chams init failed (see esp log)");
+                FileLog::Log("chams init failed (see esp log)");
 
             Trace::Initialize();
             Icons::Initialize(g_pDevice, g_pContext);
@@ -104,6 +96,12 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         {
             return oPresent(pSwapChain, SyncInterval, Flags);
         }
+    }
+
+    if (!foundationInit)
+    {
+        g_templeWare.initFoundation();
+        foundationInit = true;
     }
 
     ImGui_ImplDX11_NewFrame();
@@ -138,7 +136,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
 DWORD WINAPI MainThread(LPVOID lpReserved)
 {
-    LogToFile("MainThread started");
+    FileLog::Log("MainThread started");
 
     bool init_hook = false;
     do
@@ -149,7 +147,7 @@ DWORD WINAPI MainThread(LPVOID lpReserved)
             {
                 kiero::bind(8, (void**)&oPresent, hkPresent);
                 init_hook = true;
-                LogToFile("kiero bind(8) done");
+                FileLog::Log("kiero bind(8) done");
             }
         }
         Sleep(100);
@@ -166,7 +164,8 @@ BOOL WINAPI DllMain(HMODULE hMod, DWORD dwReason, LPVOID lpReserved)
     {
         g_hModule = hMod;
         DisableThreadLibraryCalls(hMod);
-        LogToFile("DLL_PROCESS_ATTACH");
+        FileLog::Initialize();
+        FileLog::Log("DLL_PROCESS_ATTACH");
         CreateThread(nullptr, 0, MainThread, hMod, 0, nullptr);
     }
     return TRUE;

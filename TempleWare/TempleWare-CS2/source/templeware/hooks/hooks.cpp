@@ -56,6 +56,11 @@ void __fastcall H::hkFrameStageNotify(void* a1, int stage)
 	if (!original)
 		return;
 
+	static std::atomic<bool> s_firstCallLogged{false};
+	if (!s_firstCallLogged.exchange(true)) {
+		Validation::LogFramestageFirstCall();
+	}
+
 	original(a1, stage);
 	if (!I::EngineClient->connected() || !I::EngineClient->in_game())
 		return;
@@ -182,6 +187,7 @@ void H::Hooks::init() {
 
 	// Default
 	FrameStageNotify.Add((void*)M::patternScan("client", ("48 89 5C 24 ? 48 89 6C 24 ? 57 48 83 EC 40 48 8B F9 33 ED")), &hkFrameStageNotify);
+	Validation::LogFramestageHookInstalled();
 	// DrawArray.Add((void*)M::patternScan("scenesystem", ("48 8B C4 53 57 41 54 48 81 EC D0 00 00 00 49 63 F9 49")), &chams::hook);
 	GetRenderFov.Add((void*)M::patternScan("client", "40 53 48 83 EC ? 48 8B D9 E8 ? ? ? ? 48 85 C0 74 ? 48 8B C8 48 83 C4"), &hkGetRenderFov);
 	LevelInit.Add((void*)M::patternScan("client", "48 89 74 24 ? 57 48 83 EC ? 48 8B 0D ? ? ? ? 48 8B FA"), &hkLevelInit);

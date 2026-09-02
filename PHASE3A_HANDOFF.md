@@ -36,67 +36,175 @@
   - `OnPatternResolution()` — logs pattern name, resolved address, success/failure
   - Not yet hooked into specific pattern scans (see Remaining Assumptions)
 
+## Root Cause Found
+
+**Why Validation::Initialize() was unreachable before:**
+- `Validation::Initialize()` was only called from `H::Hooks::init()` (`source/templeware/hooks/hooks.cpp:163`)
+- `H::Hooks::init()` was only called from `TempleWare::init()` (`source/templeware/templeware.cpp:50`)
+- `TempleWare::init()` was only called from the **backup** `main.cpp.bak_20260830_164200` (line 130)
+- The **active** `main.cpp` did NOT instantiate `TempleWare` and did NOT call `TempleWare::init()`
+- Therefore the entire TempleWare foundation (interfaces, hooks, LocalPlayerCache, validation) was never initialized
+
+**Why Phase3A messages did not appear in TempleWare.log:**
+- The active runtime (`main.cpp`) used its own private `LogToFile()` function writing to `%TEMP%/TempleWare.log`
+- The TempleWare validation logging used `Logger::Log()` which calls `I::ConColorMsg()` (console-only, no file output)
+- The TempleWare file logger in `templeware.cpp::FileLog()` was never reached because `TempleWare::init()` was never called
+- Two completely separate logging systems existed with no connection between them
+
+## Previous Unreachable Call Graph
+
+```
+DllMain (main.cpp:163)
+  -> MainThread (main.cpp:139)
+      -> kiero::init(D3D11)
+      -> kiero::bind(8, hkPresent)
+          -> hkPresent (main.cpp:69) [on first Present call]
+              -> ImGui/overlay init
+              -> Chams::Initialize()
+              -> Trace::Initialize()
+              -> Icons::Initialize()
+              -> Esp::Draw()/Update*()
+              -> nerv_bridge::tick()
+              -> Gui::Render()
+          [TempleWare foundation NEVER reached]
+              [Validation::Initialize() NEVER called]
+              [H::Hooks::init() NEVER called]
+              [hkFrameStageNotify NEVER installed]
+              [LocalPlayerCache::update() NEVER called]
+```
+
+## Runtime Architecture Fix
+
+**Subsystem Classification:**
+
+| Subsystem | Classification | Notes |
+|-----------|----------------|-------|
+| modules | REQUIRED FOUNDATION | Now initialized via `initFoundation()` |
+| schema | REQUIRED FOUNDATION | Now initialized via `initFoundation()` |
+| interfaces | REQUIRED FOUNDATION | Now initialized via `initFoundation()` |
+| hooks | REQUIRED FOUNDATION | Now initialized via `initFoundation()` |
+| renderer | DUPLICATE | Active in main.cpp (Chams/ESP/Gui); NOT initialized by foundation |
+| menu | DUPLICATE | Active in main.cpp (Gui); NOT initialized by foundation |
+| visuals | DUPLICATE | Active in main.cpp (Esp); NOT initialized by foundation |
+| Present hook | ACTIVE CURRENT | Owned by main.cpp kiero bind |
+| ESP | ACTIVE CURRENT | Owned by main.cpp Esp namespace |
+| Chams | ACTIVE CURRENT | Owned by main.cpp Chams namespace |
+| Trace | ACTIVE CURRENT | Owned by main.cpp Trace namespace |
+| nerv_bridge | ACTIVE CURRENT | Owned by main.cpp, fed TW local pointers |
+| LocalPlayerCache | REQUIRED FOUNDATION | Now updated from hkFrameStageNotify |
+| validation | REQUIRED FOUNDATION | Now initialized and logging to file |
+
+**Fix Applied:**
+1. Split `TempleWare::init()` into `initFoundation()` (modules, schema, interfaces, hooks) and `initRenderer()` (menu, visuals)
+2. Created reusable `FileLog` utility (`source/templeware/utils/filelog/filelog.h/.cpp`) writing to `%TEMP%/TempleWare.log`
+3. Modified active `main.cpp` to:
+   - Include `templeware.h` and `filelog.h`
+   - Instantiate `TempleWare g_templeWare`
+   - Call `FileLog::Initialize()` in `DllMain`
+   - Call `g_templeWare.initFoundation()` on first `hkPresent` after D3D11 device ready
+   - Replace private `LogToFile()` with `FileLog::Log()`
+4. Validation now dual-logs: `Logger::Log()` (console) + `FileLog::Log()` (file)
+5. Added one-time milestone markers (see below)
+
+**Duplicate Legacy Systems Deliberately NOT Initialized:**
+- `renderer.menu.init()` — main.cpp owns ImGui/Gui
+- `renderer.visuals.init()` — main.cpp owns Esp/Chams/Trace/Icons
+- `TempleWare::init()` full path — would double-initialize renderer/menu/visuals
+
+## Validation Logging Fix
+
+- Refactored proven file logger from `main.cpp::LogToFile()` into reusable `FileLog` utility
+- Validation now writes to same `%TEMP%/TempleWare.log` as active runtime
+- All validation messages (including milestones) appear in single unified log
+- Console logging via `Logger::Log()` preserved for debug visibility
+
 ## Files Changed
 
 | Path | Purpose |
 |------|---------|
-| `source/templeware/utils/validation/validation.h` | Validation harness interface — counters, rate limiter, function declarations |
-| `source/templeware/utils/validation/validation.cpp` | Implementation — logging, counters, rate limiting |
-| `source/templeware/hooks/hooks.cpp` | Added validation calls in `hkFrameStageNotify`, `hkOnLevelShutdown`, `Hooks::init` |
-| `source/templeware/interfaces/CGameEntitySystem/CGameEntitySystem.h` | Added handle lookup validation in `Get(handle)` |
-| `source/templeware/interfaces/CGameEntitySystem/CGameEntitySystem.h` | Added validation.h include |
-| `TempleWare-CS2.vcxproj` | Added validation.cpp/.h to build |
+| `source/templeware/utils/filelog/filelog.h` | New reusable file logger interface |
+| `source/templeware/utils/filelog/filelog.cpp` | New reusable file logger implementation |
+| `source/templeware/templeware.h` | Added `initFoundation()` and `initRenderer()` declarations |
+| `source/templeware/templeware.cpp` | Split init into foundation/renderer; use FileLog utility |
+| `source/main.cpp` | Call `initFoundation()` from hkPresent; use FileLog; instantiate TempleWare |
+| `source/templeware/utils/validation/validation.h` | Added milestone logging function declarations |
+| `source/templeware/utils/validation/validation.cpp` | Added milestone logging; dual-log to FileLog + Logger |
+| `source/templeware/hooks/hooks.cpp` | Added `FRAMESTAGE HOOK INSTALLED` and `FRAMESTAGE FIRST CALL` milestones |
+| `TempleWare-CS2.vcxproj` | Added filelog.cpp/.h to build |
 
-## Runtime Checks Available
-
-| Check | Trigger | Logs On |
-|-------|---------|---------|
-| LocalPlayerCache update | Every frame (in-game) | Snapshot contents, rate-limited |
-| LocalPlayerCache reset | Level shutdown | Reset event |
-| Handle lookup | Every `Get(handle)` call | Mismatches (always), OK (rate-limited) |
-| Entity identity | Every frame (local pawn/controller) | Index, serial, schema name, handle match |
-| Scene-node chain | Every frame (local pawn) | Pointer chain, bone cache, bone count |
-| Periodic summary | Every 64 ticks (configurable) | All counters aggregated |
-
-## Expected Log Output
+## Exact Startup Path After Fix
 
 ```
-[Validation] Diagnostic harness initialized
-[Validation] LocalPlayerCache update #1: pawn=0x... controller=0x... observer_pawn=0x0 observer_ctrl=0x0 team=2 alive=1 valid=1
-[Validation] SceneNodeChain: scene=0x... skeleton=0x... bone_cache=0x... bone_count=128
-[Validation] EntityIdentity: idx=1 serial=5 valid=1 schema='C_CSPlayerPawn' handle_match=1
-[Validation] Handle OK: idx=1 serial=5 resolved=0x...
-[Validation] Summary: cache_updates=64 resets=0 handle_lookups=128 handle_mismatches=0 identity_checks=128 identity_mismatches=0 scene_checks=64 scene_failures=0 vtable_calls=0 vtable_failures=0 pattern_resolutions=0 pattern_failures=0
-[Validation] LocalPlayerCache reset
+DllMain (main.cpp)
+  -> MainThread
+      -> kiero::init(D3D11)
+      -> kiero::bind(8, hkPresent)
+          -> hkPresent (first call)
+              -> GetDevice/GetImmediateContext/CreateRenderTargetView
+              -> ImGui/Win32/DX11 init
+              -> FileLog::Log("overlay init complete")
+              -> Chams::Initialize()
+              -> Trace::Initialize()
+              -> Icons::Initialize()
+              -> g_templeWare.initFoundation()  [NEW]
+                  -> Validation::LogFoundationInitBegin()
+                  -> modules.init()
+                  -> schema.init("client.dll", 0)
+                  -> interfaces.init()
+                  -> Validation::LogInterfacesReady()
+                  -> Validation::LogHookInitBegin()
+                  -> hooks.init()
+                      -> Validation::Initialize() -> [Validation] PHASE3A BUILD ACTIVE
+                      -> FrameStageNotify hook installed
+                      -> Validation::LogFramestageHookInstalled()
+                      -> MH_EnableHook(MH_ALL_HOOKS)
+              -> foundationInit = true
+          -> hkPresent (subsequent calls)
+              -> Esp/Chams/Trace/nerv_bridge/Gui tick
+              -> FrameStageNotify fires (from hooks.init)
+                  -> original(a1, stage)
+                  -> Validation::LogFramestageFirstCall() [first in-game call only]
+                  -> g_ctx->local_pawn = get_local_pawn()
+                  -> g_ctx->local_controller = get_base_entity<CCSPlayerController>(get_local_player())
+                  -> g_local_player_cache->update()
+                  -> Validation::OnLocalPlayerCacheUpdate() -> [Validation] CACHE UPDATE FIRST CALL
+                  -> Validation::OnSceneNodeChainCheck()
+                  -> Validation::OnEntityIdentityCheck()
+                  -> Validation::LogPeriodicSummary()
 ```
-
-## Runtime Results
-
-**PENDING** — Requires in-game testing with live CS2 instance. No runtime logs available at this time.
 
 ## Build Verification
 
-- **Command**: `MSBuild.exe TempleWare-CS2.vcxproj /p:Configuration=Release /p:Platform=x64`
+- **Command**: `MSBuild.exe TempleWare-CS2.vcxproj /p:Configuration=Release /p:Platform=x64` (via VS2022 MSBuild at `C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe`)
 - **Result**: Success — `TempleWare.dll` built at `C:\CS\TempleWare\x64\Release\TempleWare.dll`
 - **Warnings**: 0
 - **Errors**: 0 (clean build)
 
-## Remaining Assumptions
+## Expected Milestone Order
 
-| Assumption | Status | Notes |
-|------------|--------|-------|
-| Handle serial adjustment `(flags & 1)` in `CEntityInstance::handle()` | **REQUIRES RUNTIME VALIDATION** | Undocumented; validation logs will reveal mismatches |
-| `CEntityIdentity::index` schema offset (0x10) | **REQUIRES RUNTIME VALIDATION** | Static offset; may differ by game version |
-| `CGameSceneNode::GetSkeletonInstance()` vfunc index 13 | **REQUIRES RUNTIME VALIDATION** | Hardcoded; will log NULL if wrong |
-| Bone cache offset (0x140 + 0x80 in `GetBonePos`) | **REQUIRES RUNTIME VALIDATION** | Not schema-based; will log NULL if wrong |
-| `get_local_pawn` / `get_local_controller` patterns | **REQUIRES RUNTIME VALIDATION** | Pattern-scanned; validation logs NULL pointers |
-| Movement services vtable indices (32/46/47) | **REQUIRES RUNTIME VALIDATION** | Not yet instrumented; ready for hooking |
-| Prediction vtable calls | **REQUIRES RUNTIME VALIDATION** | Not yet instrumented |
-| Trace system patterns (manager/ray/filter) | **REQUIRES RUNTIME VALIDATION** | Not yet instrumented |
-| Input system patterns (`get_user_cmd` chain) | **REQUIRES RUNTIME VALIDATION** | Not yet instrumented |
+1. `[Validation] PHASE3A BUILD ACTIVE` — from `Validation::Initialize()` in `hooks.init()`
+2. `[Validation] FOUNDATION INIT BEGIN` — from `Validation::LogFoundationInitBegin()` at start of `initFoundation()`
+3. `[Validation] INTERFACES READY` — after `interfaces.init()` completes
+4. `[Validation] HOOK INIT BEGIN` — before `hooks.init()` starts
+5. `[Validation] FRAMESTAGE HOOK INSTALLED` — after `FrameStageNotify.Add()` succeeds
+6. `[Validation] FRAMESTAGE FIRST CALL` — first time `hkFrameStageNotify` executes in-game
+7. `[Validation] CACHE UPDATE FIRST CALL` — first time `OnLocalPlayerCacheUpdate()` runs
 
-## Ready For Next Phase
+Each milestone executes exactly once (guarded by `std::atomic<bool>` exchange).
 
-**PENDING RUNTIME TEST**
+## Runtime Results
 
-The validation harness is fully implemented, integrated, and builds cleanly. All Phase 3 runtime dependencies have instrumentation points ready. The next step is to run the module in-game and collect actual log output to classify each assumption as VALID, NULL/UNAVAILABLE, INCONSISTENT, or NOT TESTED. Do not proceed to feature implementation (Phase 3B) until runtime results are analyzed.
+**PENDING NEW RUNTIME TEST**
+
+Do NOT claim Phase3A runtime validation passed until an actual new TempleWare.log is supplied with the above milestone sequence.
+
+## Next Phase Notes
+
+- Phase 3B can proceed once runtime logs confirm:
+  - All 7 milestones appear in order
+  - `LocalPlayerCache` updates show valid pawn/controller pointers
+  - `EntityIdentity` checks show matching handle/index/serial
+  - `SceneNodeChain` shows valid skeleton/bone_cache pointers
+  - No `HANDLE MISMATCH` or `identity_mismatches` in steady state
+- Handle serial adjustment `(flags & 1)` remains REQUIRES RUNTIME VALIDATION
+- All vtable indices and pattern scans remain REQUIRES RUNTIME VALIDATION
