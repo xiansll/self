@@ -21,15 +21,38 @@
 		return reinterpret_cast<std::add_pointer_t<TYPE>>(reinterpret_cast<std::uint8_t*>(const_cast<void*>(static_cast<const void*>(this))) + (uOffset)); \
 	}
 
+// Schema-backed accessors deliberately do not permanently cache a zero lookup.
+// Some accessors can be touched before the schema source is usable; freezing that
+// first zero would make every later read behave like `this + 0`. Once a non-zero
+// field offset is observed it is cached exactly as before.
 #define SCHEMA_ARRAY(TYPE, NAME, FIELD) \
     [[nodiscard]] inline TYPE* NAME() const { \
-        static const uint32_t uOffset = SchemaFinder::Get(hash_32_fnv1a_const(FIELD)); \
+        static std::uint32_t uOffset = 0U; \
+        if (uOffset == 0U) \
+            uOffset = SchemaFinder::Get(hash_32_fnv1a_const(FIELD)); \
         return reinterpret_cast<TYPE*>(reinterpret_cast<std::uint8_t*>(const_cast<void*>(static_cast<const void*>(this))) + uOffset); \
     }
 
-#define schema(TYPE, NAME, FIELD)  SCHEMA_ADD_OFFSET(TYPE, NAME, SchemaFinder::Get(hash_32_fnv1a_const(FIELD)) + 0u)
+#define schema(TYPE, NAME, FIELD) \
+    [[nodiscard]] inline std::add_lvalue_reference_t<TYPE> NAME() const \
+    { \
+        static std::uint32_t uOffset = 0U; \
+        if (uOffset == 0U) \
+            uOffset = SchemaFinder::Get(hash_32_fnv1a_const(FIELD)); \
+        return *reinterpret_cast<std::add_pointer_t<TYPE>>( \
+            reinterpret_cast<std::uint8_t*>(const_cast<void*>(static_cast<const void*>(this))) + uOffset); \
+    }
 
-#define schema_pfield(TYPE, NAME, FIELD, ADDITIONAL) SCHEMA_ADD_OFFSET(TYPE, NAME, SchemaFinder::Get(hash_32_fnv1a_const(FIELD)) + ADDITIONAL)
+#define schema_pfield(TYPE, NAME, FIELD, ADDITIONAL) \
+    [[nodiscard]] inline std::add_lvalue_reference_t<TYPE> NAME() const \
+    { \
+        static std::uint32_t uBaseOffset = 0U; \
+        if (uBaseOffset == 0U) \
+            uBaseOffset = SchemaFinder::Get(hash_32_fnv1a_const(FIELD)); \
+        const std::uint32_t uOffset = uBaseOffset + static_cast<std::uint32_t>(ADDITIONAL); \
+        return *reinterpret_cast<std::add_pointer_t<TYPE>>( \
+            reinterpret_cast<std::uint8_t*>(const_cast<void*>(static_cast<const void*>(this))) + uOffset); \
+    }
 
 #define SCHEMA_ADD_RAW_OFFSET(TYPE, NAME, OFFSET) \
     [[nodiscard]] inline TYPE NAME() const noexcept \
@@ -41,11 +64,11 @@
 #define add_offset_near(_class, _name, _type, _field_name, _offset)              \
 [[nodiscard]] inline std::add_lvalue_reference_t<_type> _name() const                  \
 {                                                                                \
-    static const uint32_t baseOffset = SchemaFinder::Get(                        \
-        hash_32_fnv1a_const(_field_name)                                         \
-    );                                                                           \
+    static std::uint32_t baseOffset = 0U;                                        \
+    if (baseOffset == 0U)                                                        \
+        baseOffset = SchemaFinder::Get(hash_32_fnv1a_const(_field_name));        \
                                                                                   \
-    static const uint32_t totalOffset = baseOffset + (_offset);                  \
+    const std::uint32_t totalOffset = baseOffset + static_cast<std::uint32_t>(_offset); \
                                                                                   \
     return *reinterpret_cast<std::add_pointer_t<_type>>(                         \
         reinterpret_cast<uint8_t*>(const_cast<void*>(static_cast<const void*>(this))) + totalOffset                           \
