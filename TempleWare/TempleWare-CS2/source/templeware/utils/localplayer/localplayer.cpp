@@ -22,11 +22,6 @@ namespace {
     constexpr std::uintptr_t kLocalPlayerPawnOffset = 0x23C6268;
     constexpr std::uintptr_t kLocalPlayerControllerOffset = 0x23A0F30;
 
-    // Resolver provenance and wrapper semantics are separate gates. The current
-    // checkpoint repairs the resolver cache and proves pointer parity only.
-    // Keep wrapper dereferences disabled until their own semantic validation pass.
-    constexpr bool kWrapperSemanticsValidated = false;
-
     void ReadClientGlobalLocals(C_CSPlayerPawn*& pawn,
                                 CCSPlayerController*& controller,
                                 std::uintptr_t& clientBase) {
@@ -48,7 +43,9 @@ namespace {
 
     void LogProviderState(LocalProvider provider,
                           bool resolverPairProven,
+                          bool wrapperSemanticsProven,
                           bool sdkDerefSafe,
+                          bool deepGraphSafe,
                           C_CSPlayerPawn* entitySystemPawn,
                           CCSPlayerController* entitySystemController,
                           C_CSPlayerPawn* gameResourcePawn,
@@ -60,24 +57,30 @@ namespace {
         static steady_clock::time_point lastLog{};
         static LocalProvider lastProvider = LocalProvider::None;
         static bool lastResolverPairProven = false;
+        static bool lastWrapperSemanticsProven = false;
         static bool lastSdkDerefSafe = false;
+        static bool lastDeepGraphSafe = false;
 
         const auto now = steady_clock::now();
         const bool providerChanged = provider != lastProvider ||
             resolverPairProven != lastResolverPairProven ||
-            sdkDerefSafe != lastSdkDerefSafe;
+            wrapperSemanticsProven != lastWrapperSemanticsProven ||
+            sdkDerefSafe != lastSdkDerefSafe ||
+            deepGraphSafe != lastDeepGraphSafe;
         const bool intervalElapsed = lastLog.time_since_epoch().count() == 0 ||
             duration_cast<milliseconds>(now - lastLog).count() >= 1000;
 
         if (!providerChanged && !intervalElapsed)
             return;
 
-        char buf[896];
+        char buf[1024];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] LocalProvider: selected=%d resolver_proven=%d sdk_safe=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p client=%p cg_pawn=%p cg_ctrl=%p",
+            "[Validation] LocalProvider: selected=%d resolver_proven=%d wrapper_proven=%d sdk_safe=%d deep_safe=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p client=%p cg_pawn=%p cg_ctrl=%p",
             static_cast<int>(provider),
             resolverPairProven ? 1 : 0,
+            wrapperSemanticsProven ? 1 : 0,
             sdkDerefSafe ? 1 : 0,
+            deepGraphSafe ? 1 : 0,
             static_cast<void*>(I::EntitySystem),
             static_cast<void*>(entitySystemPawn),
             static_cast<void*>(entitySystemController),
@@ -92,7 +95,9 @@ namespace {
 
         lastProvider = provider;
         lastResolverPairProven = resolverPairProven;
+        lastWrapperSemanticsProven = wrapperSemanticsProven;
         lastSdkDerefSafe = sdkDerefSafe;
+        lastDeepGraphSafe = deepGraphSafe;
         lastLog = now;
     }
 }
@@ -157,18 +162,26 @@ void LocalPlayerCache::update() {
 
     // Resolver proof is based on independent address parity with the existing
     // pointer-only reference source. It intentionally does not imply wrapper
-    // layout safety. The latter remains a separate explicit gate.
+    // layout safety.
     const bool resolverPairProven =
         entitySystemPawn && entitySystemController &&
         clientGlobalPawn && clientGlobalController &&
         entitySystemPawn == clientGlobalPawn &&
         entitySystemController == clientGlobalController;
 
-    const bool sdkDerefSafe = resolverPairProven && kWrapperSemanticsValidated;
+    // P3D can publish only the basic wrapper semantic gate after repeated,
+    // exception-free read-only probes. Deeper identity/scene/skeleton traversal
+    // remains closed and must be proven independently later.
+    const bool wrapperSemanticsProven =
+        resolverPairProven && LocalPlayerTrust::basic_wrapper_semantics_proven();
+    const bool sdkDerefSafe = wrapperSemanticsProven;
+    const bool deepGraphSafe = false;
 
     LogProviderState(provider,
                      resolverPairProven,
+                     wrapperSemanticsProven,
                      sdkDerefSafe,
+                     deepGraphSafe,
                      entitySystemPawn,
                      entitySystemController,
                      gameResourcePawn,
@@ -182,43 +195,50 @@ void LocalPlayerCache::update() {
     m_snapshot.observer_pawn = 0;
     m_snapshot.observer_controller = 0;
     m_snapshot.sdk_resolver_pair_proven = resolverPairProven;
+    m_snapshot.sdk_wrapper_semantics_proven = wrapperSemanticsProven;
     m_snapshot.sdk_deref_safe = sdkDerefSafe;
+    m_snapshot.sdk_deep_graph_safe = deepGraphSafe;
 
+    // Basic wrapper reads only. The P3D semantic probe validates exactly this
+    // small set before the gate can become true.
     if (local_pawn && sdkDerefSafe) {
         m_snapshot.team = local_pawn->m_iTeamNum();
         m_snapshot.is_alive = local_pawn->is_alive();
         m_snapshot.is_team_mode = true;
     } else {
-        // Pointer-only/proven-resolver mode: do not interpret the object with
-        // TempleWare wrappers until wrapper/layout semantics are separately proven.
         m_snapshot.team = 0;
         m_snapshot.is_alive = false;
         m_snapshot.is_team_mode = false;
     }
 
     if (local_controller && sdkDerefSafe) {
-        if (auto observer_pawn_handle = local_controller->m_hObserverPawn(); observer_pawn_handle.valid()) {
-            C_CSPlayerPawn* observer_pawn = nullptr;
-            if (I::GameEntity && I::GameEntity->Instance)
-                observer_pawn = I::GameEntity->Instance->Get<C_CSPlayerPawn>(observer_pawn_handle);
-            if (!observer_pawn && I::EntitySystem)
-                observer_pawn = I::EntitySystem->get_base_entity<C_CSPlayerPawn>(observer_pawn_handle.index());
+        m_snapshot.view_team = local_controller->m_iDesiredTeam();
 
-            if (observer_pawn) {
-                m_snapshot.observer_pawn = reinterpret_cast<std::uintptr_t>(observer_pawn);
-                if (auto observer_controller_handle = observer_pawn->m_hController(); observer_controller_handle.valid()) {
-                    CCSPlayerController* observer_controller = nullptr;
-                    if (I::GameEntity && I::GameEntity->Instance)
-                        observer_controller = I::GameEntity->Instance->Get<CCSPlayerController>(observer_controller_handle);
-                    if (!observer_controller && I::EntitySystem)
-                        observer_controller = I::EntitySystem->get_base_entity<CCSPlayerController>(observer_controller_handle.index());
+        // Observer handle resolution crosses into the deeper entity graph. Keep
+        // it closed even after the basic wrapper fields are proven.
+        if (deepGraphSafe) {
+            if (auto observer_pawn_handle = local_controller->m_hObserverPawn(); observer_pawn_handle.valid()) {
+                C_CSPlayerPawn* observer_pawn = nullptr;
+                if (I::GameEntity && I::GameEntity->Instance)
+                    observer_pawn = I::GameEntity->Instance->Get<C_CSPlayerPawn>(observer_pawn_handle);
+                if (!observer_pawn && I::EntitySystem)
+                    observer_pawn = I::EntitySystem->get_base_entity<C_CSPlayerPawn>(observer_pawn_handle.index());
 
-                    if (observer_controller)
-                        m_snapshot.observer_controller = reinterpret_cast<std::uintptr_t>(observer_controller);
+                if (observer_pawn) {
+                    m_snapshot.observer_pawn = reinterpret_cast<std::uintptr_t>(observer_pawn);
+                    if (auto observer_controller_handle = observer_pawn->m_hController(); observer_controller_handle.valid()) {
+                        CCSPlayerController* observer_controller = nullptr;
+                        if (I::GameEntity && I::GameEntity->Instance)
+                            observer_controller = I::GameEntity->Instance->Get<CCSPlayerController>(observer_controller_handle);
+                        if (!observer_controller && I::EntitySystem)
+                            observer_controller = I::EntitySystem->get_base_entity<CCSPlayerController>(observer_controller_handle.index());
+
+                        if (observer_controller)
+                            m_snapshot.observer_controller = reinterpret_cast<std::uintptr_t>(observer_controller);
+                    }
                 }
             }
         }
-        m_snapshot.view_team = local_controller->m_iDesiredTeam();
     } else {
         m_snapshot.view_team = 0;
     }
