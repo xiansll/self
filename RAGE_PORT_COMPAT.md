@@ -29,22 +29,24 @@ Velocity therefore cannot be dropped into TempleWare as a single `rage.cpp` file
 | Velocity dependency | TempleWare status | Port action |
 |---|---|---|
 | `math::vector2/vector3` | Available | Use `VelocityRageCompat::vector2/vector3` aliases |
-| `systems::input::usercmd` | Type available as `CUserCmd` | Use compatibility alias; runtime command pipeline still gated |
+| `systems::input::usercmd` | Type available as `CUserCmd` | Use compatibility alias; runtime command source remains gated |
 | `systems::local::snapshot` | Shape available as `LocalPlayerSnapshot` | Use `VelocityRageCompat::local_state` adapter |
 | Local pawn/controller lifecycle | Pointer-only provider works | Keep provenance gate; do not deep-deref until `sdk_deref_safe` is proven |
 | Prediction object | Existing `C_Prediction` exists | Treat as partial until its runtime contract is validated for the port |
-| Basic line trace | Existing `Trace` service exists | Rich Velocity trace result/filter adapter still missing |
+| Basic line trace | Existing `Trace` service exists, runtime currently unresolved | Rich Velocity trace result/filter adapter still missing |
 | Entity cache / lookup | TempleWare has entity systems, but API differs | Build an adapter; do not make Velocity depend directly on TempleWare internals |
 | Bones | Existing project has bone-related code, but no validated Velocity-compatible service contract yet | Add a dedicated adapter after SDK layout is proven |
 | Hitboxes | No validated Velocity-compatible adapter yet | Add a dedicated query/result adapter |
 | Rage settings | TempleWare config schema does not match Velocity Rage settings | Add a separate config adapter; keep it isolated from runtime behaviour |
-| CreateMove lifecycle | Legacy hook exists but is not part of the current safe Present diagnostic path | Add a lifecycle adapter only after Phase 3 runtime blockers are resolved |
+| CreateMove lifecycle | Non-operational lifecycle contract now exists | Runtime command acquisition stays disabled until a separately validated source is available |
 
-## Current Runtime Blocker
+## Current Runtime Blockers
 
 Phase 3C currently treats the live local pawn/controller as pointer-only because the TempleWare SDK local resolver path is not proven. A non-null fallback pointer is not sufficient evidence that TempleWare entity wrapper methods can safely interpret the object.
 
-Therefore compatibility work may proceed at the type/adapter level, but any adapter that requires entity layout interpretation remains closed until the SDK resolver/provenance gate is green.
+The current trace service also exposes an API contract but is not runtime-ready when its required internal functions fail to resolve. Compatibility code must keep `trace_runtime=false` in that state rather than treating API presence as proof of a working trace backend.
+
+Therefore compatibility work may proceed at the type/adapter level, but any adapter that requires entity layout interpretation, an active command source, or live tracing remains closed until its runtime gate is green.
 
 ## Phase 4 Compatibility Checkpoints
 
@@ -62,12 +64,17 @@ It provides:
 
 ### P4B - Command lifecycle adapter
 
-Required later:
+Contract implemented by `source/templeware/compat/velocity_command_compat.h`.
 
-- expose the current command through one TempleWare-owned adapter
-- define init/update/reset ownership
-- keep command acquisition separate from feature behaviour
-- validate map/disconnect/respawn transitions before any ported combat module consumes it
+It now provides:
+
+- one TempleWare-owned location for a future validated `CUserCmd*`
+- explicit begin/end/reset ownership
+- a generation counter for lifecycle diagnostics
+- separate `command_pipeline_adapter` and `command_runtime` readiness states
+- no CreateMove hook installation, command acquisition, or command mutation
+
+The contract is considered present at compile time, but `command_runtime` intentionally remains false until a safe command source is wired and independently validated.
 
 ### P4C - Data service adapters
 
@@ -97,12 +104,13 @@ The compatibility gate stays BLOCKED until all of these are true:
 3. input runtime is available
 4. prediction runtime is available
 5. trace runtime is available
-6. command pipeline adapter exists
-7. entity cache adapter exists
-8. bone adapter exists
-9. hitbox adapter exists
-10. rich trace adapter exists
-11. Rage config adapter exists
+6. command lifecycle contract exists
+7. command runtime source is proven
+8. entity cache adapter exists
+9. bone adapter exists
+10. hitbox adapter exists
+11. rich trace adapter exists
+12. Rage config adapter exists
 
 Only after that should the Velocity Rage source be mechanically adapted against the compatibility interfaces.
 
