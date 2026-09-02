@@ -22,10 +22,13 @@ struct LocalPlayerSnapshot {
     bool is_alive = false;
     bool is_team_mode = false;
 
-    // True only when the selected pointers came from TempleWare SDK accessors
-    // that are safe to dereference with TempleWare entity wrappers. A non-null
-    // pointer from the client-global fallback is useful as a liveness signal,
-    // but must remain pointer-only until its layout compatibility is validated.
+    // True when the SDK resolver pair independently agrees with the existing
+    // pointer-only reference provider. This proves pointer provenance only; it
+    // does not prove that TempleWare's entity wrapper/layout is semantically safe.
+    bool sdk_resolver_pair_proven = false;
+
+    // True only after both resolver provenance and wrapper/layout semantics are
+    // separately proven. Until then all entity-wrapper dereferences remain gated.
     bool sdk_deref_safe = false;
 
     [[nodiscard]] std::uintptr_t view_controller() const { return is_alive ? controller : observer_controller; }
