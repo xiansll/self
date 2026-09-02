@@ -12,6 +12,23 @@ class CCSPlayerController;
 #include "../../../templeware/interfaces/interfaces.h"
 #include "../../../templeware/interfaces/CGameEntitySystem/CGameEntitySystem.h"
 
+// Runtime trust is deliberately split into layers. Resolver provenance can be
+// proven independently from wrapper semantics, and basic wrapper semantics can
+// be proven independently from deeper identity/scene/skeleton graph traversal.
+// This prevents one successful pointer lookup from silently opening every SDK
+// dereference path at once.
+namespace LocalPlayerTrust {
+inline std::atomic<bool> g_basic_wrapper_semantics_proven{false};
+
+inline void publish_basic_wrapper_semantics(bool proven) noexcept {
+    g_basic_wrapper_semantics_proven.store(proven, std::memory_order_release);
+}
+
+[[nodiscard]] inline bool basic_wrapper_semantics_proven() noexcept {
+    return g_basic_wrapper_semantics_proven.load(std::memory_order_acquire);
+}
+} // namespace LocalPlayerTrust
+
 struct LocalPlayerSnapshot {
     std::uintptr_t controller = 0;
     std::uintptr_t pawn = 0;
@@ -23,13 +40,21 @@ struct LocalPlayerSnapshot {
     bool is_team_mode = false;
 
     // True when the SDK resolver pair independently agrees with the existing
-    // pointer-only reference provider. This proves pointer provenance only; it
-    // does not prove that TempleWare's entity wrapper/layout is semantically safe.
+    // pointer-only reference provider. This proves pointer provenance only.
     bool sdk_resolver_pair_proven = false;
 
-    // True only after both resolver provenance and wrapper/layout semantics are
-    // separately proven. Until then all entity-wrapper dereferences remain gated.
+    // True after a read-only semantic probe has validated the basic pawn and
+    // controller wrapper fields used by LocalPlayerCache (health/team/local
+    // controller/alive/desired-team) without exceptions and with sane values.
+    bool sdk_wrapper_semantics_proven = false;
+
+    // Compatibility-facing basic wrapper gate. This intentionally does NOT mean
+    // scene-node/entity-identity/skeleton graph traversal has been proven safe.
     bool sdk_deref_safe = false;
+
+    // Separate hard gate for deeper graph traversal. P3D leaves this false; a
+    // later independent checkpoint must prove identity/scene/skeleton semantics.
+    bool sdk_deep_graph_safe = false;
 
     [[nodiscard]] std::uintptr_t view_controller() const { return is_alive ? controller : observer_controller; }
     [[nodiscard]] std::uintptr_t view_pawn() const { return is_alive ? pawn : observer_pawn; }
