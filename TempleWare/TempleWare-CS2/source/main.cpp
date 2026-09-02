@@ -26,6 +26,7 @@
 #include "templeware/compat/velocity_rage_compat.h"
 #include "templeware/compat/velocity_port_context.h"
 #include "templeware/compat/velocity_feature_integration.h"
+#include "templeware/compat/velocity_owner_bindings.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -121,6 +122,10 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // Its command lane remains dormant until the owner explicitly calls
             // dispatch_command() from a separately validated command source.
             VelocityRageCompat::FeatureIntegration::initialize();
+
+            // P5D gives the owner one stable file/entry point for all future
+            // provider, config translator, and feature registrations.
+            VelocityRageCompat::OwnerBindings::install();
 
             // Trace::Initialize() runs very early with the overlay. Re-run only
             // the exact existing resolver expressions after foundation init so
@@ -371,6 +376,7 @@ DWORD WINAPI MainThread(LPVOID lpReserved)
         Sleep(100);
     } while (!GetAsyncKeyState(VK_END));
 
+    VelocityRageCompat::OwnerBindings::uninstall();
     VelocityRageCompat::FeatureIntegration::shutdown();
     VelocityRageCompat::g_port_context.reset_volatile();
     VelocityRageCompat::shutdown_runtime();
