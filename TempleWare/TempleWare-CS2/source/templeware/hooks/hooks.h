@@ -46,6 +46,12 @@ namespace H {
 
 	class Hooks {
 	public:
+		// Phase3A-safe path: installs only the lifecycle hook needed for
+		// LocalPlayerCache/runtime validation. Returns true only if the
+		// FrameStageNotify hook is actually active.
+		bool initValidation();
+
+		// Legacy/full hook initialization path.
 		void init();
 	};
 }
