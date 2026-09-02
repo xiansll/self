@@ -21,6 +21,7 @@
 #include "templeware/utils/filelog/filelog.h"
 #include "templeware/utils/localplayer/localplayer.h"
 #include "templeware/utils/validation/validation.h"
+#include "templeware/utils/validation/phase3c_validation.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -105,9 +106,9 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         foundationInit = g_templeWare.initFoundation();
     }
 
-    // Present is the proven-safe Phase 3 runtime validation path. Keep the
-    // suspect FrameStageNotify detour disabled while Phase 3 validates local
-    // provider/lifecycle and resolver health.
+    // Present is the proven-safe Phase 3 runtime validation path. The suspect
+    // FrameStageNotify detour stays disabled. Phase 3C now runs as one complete
+    // staged diagnostic suite; every risky read/call has ENTER/PASS/FAIL markers.
     if (foundationInit)
     {
         static bool s_presentDiagnosticLogged = false;
@@ -117,7 +118,6 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         static bool s_pawnChangeLogged = false;
         static bool s_lifecycleOkLogged = false;
         static bool s_phase3cActiveLogged = false;
-        static bool s_phase3cResolverHealthLogged = false;
         static bool s_wasInGame = false;
         static std::uintptr_t s_lastPawn = 0;
 
@@ -131,6 +131,12 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         {
             FileLog::Log("[P3B] ACTIVE - LOCAL RUNTIME/LIFECYCLE VALIDATION");
             s_phase3bActiveLogged = true;
+        }
+
+        if (!s_phase3cActiveLogged)
+        {
+            FileLog::Log("[P3C] ACTIVE - FULL STAGED SDK VALIDATION SUITE");
+            s_phase3cActiveLogged = true;
         }
 
         const bool inGame = I::EngineClient &&
@@ -178,40 +184,9 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                 s_lastPawn = snapshot.pawn;
             }
 
-            // Phase 3C checkpoint 1: diagnose only the health of the already-
-            // existing SDK resolver addresses. Do not alter signatures, call
-            // arguments, object layouts, or enable deep dereferences here.
-            if (!s_phase3cActiveLogged)
-            {
-                FileLog::Log("[P3C] ACTIVE - SDK RESOLVER HEALTH CHECK");
-                s_phase3cActiveLogged = true;
-            }
-
-            if (!s_phase3cResolverHealthLogged && I::EntitySystem)
-            {
-                void* pawnResolver = I::EntitySystem->diagnostic_local_pawn_resolver();
-                void* controllerResolver = I::EntitySystem->diagnostic_local_controller_resolver();
-                const bool providerAlias = I::GameEntity &&
-                    I::GameEntity->Instance == I::EntitySystem;
-
-                char buf[320];
-                std::snprintf(buf, sizeof(buf),
-                    "[P3C] RESOLVER HEALTH pawn_resolver=%p controller_resolver=%p provider_alias=%d sdk_safe=%d",
-                    pawnResolver,
-                    controllerResolver,
-                    providerAlias ? 1 : 0,
-                    snapshot.sdk_deref_safe ? 1 : 0);
-                FileLog::Log(buf);
-
-                if (!pawnResolver)
-                    FileLog::Log("[P3C] PAWN RESOLVER MISSING");
-                if (!controllerResolver)
-                    FileLog::Log("[P3C] CONTROLLER RESOLVER MISSING");
-                if (pawnResolver && controllerResolver)
-                    FileLog::Log("[P3C] RESOLVERS PRESENT - RESULT/SEMANTICS REMAIN TO VALIDATE");
-
-                s_phase3cResolverHealthLogged = true;
-            }
+            // Full P3C diagnostic run. The harness reruns only when the local
+            // pawn/controller pair changes, so normal Present frames stay quiet.
+            Phase3C::Run(snapshot);
 
             if (snapshot.sdk_deref_safe)
             {
@@ -232,7 +207,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                 static bool s_pointerOnlyLogged = false;
                 if (!s_pointerOnlyLogged)
                 {
-                    FileLog::Log("[Validation] POINTER-ONLY LOCAL FOUND - DEEP SDK DEREF SKIPPED");
+                    FileLog::Log("[Validation] POINTER-ONLY LOCAL FOUND - NORMAL DEEP SDK DEREF SKIPPED");
                     s_pointerOnlyLogged = true;
                 }
             }
