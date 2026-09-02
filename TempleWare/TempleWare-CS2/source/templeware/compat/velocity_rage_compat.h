@@ -17,6 +17,7 @@
 #include "../utils/localplayer/localplayer.h"
 #include "velocity_command_compat.h"
 #include "velocity_data_compat.h"
+#include "velocity_config_compat.h"
 #include "../../trace/trace.h"
 
 namespace VelocityRageCompat {
@@ -87,6 +88,7 @@ struct readiness {
     bool bone_adapter = data_contracts::bones;
     bool hitbox_adapter = data_contracts::hitboxes;
     bool rich_trace_adapter = data_contracts::rich_trace;
+    bool rage_config_adapter = config_contracts::rage_config;
 
     // Runtime state that can be observed without deep entity dereferences.
     bool local_pair = false;
@@ -104,8 +106,10 @@ struct readiness {
     bool hitbox_runtime = false;
     bool rich_trace_runtime = false;
 
-    // Still missing at the compatibility-contract level.
-    bool rage_config_adapter = false;
+    // P4D config contract exists independently from a live TempleWare->Velocity
+    // settings translation. Runtime remains closed until a producer publishes a
+    // validated snapshot.
+    bool rage_config_runtime = false;
 };
 
 [[nodiscard]] inline readiness query(const LocalPlayerSnapshot& snapshot) {
@@ -116,6 +120,7 @@ struct readiness {
     r.prediction_runtime = static_cast<bool>(g_prediction);
     r.trace_runtime = Trace::Ready();
     r.command_runtime = g_command_lifecycle.runtime_ready();
+    r.rage_config_runtime = g_rage_config_store.runtime_ready();
     return r;
 }
 
@@ -137,7 +142,8 @@ struct readiness {
            r.hitbox_runtime &&
            r.rich_trace_adapter &&
            r.rich_trace_runtime &&
-           r.rage_config_adapter;
+           r.rage_config_adapter &&
+           r.rage_config_runtime;
 }
 
 inline void log_readiness(const LocalPlayerSnapshot& snapshot) {
@@ -157,19 +163,20 @@ inline void log_readiness(const LocalPlayerSnapshot& snapshot) {
 
     const readiness r = query(snapshot);
 
-    char buf[640];
+    char buf[704];
     std::snprintf(buf, sizeof(buf),
-        "[P4COMPAT] TYPE MAP vector=%d usercmd=%d local=%d prediction=%d trace_api=%d command_contract=%d",
+        "[P4COMPAT] TYPE MAP vector=%d usercmd=%d local=%d prediction=%d trace_api=%d command_contract=%d config_contract=%d",
         r.vector_types ? 1 : 0,
         r.usercmd_type ? 1 : 0,
         r.local_snapshot_adapter ? 1 : 0,
         r.prediction_object ? 1 : 0,
         r.basic_trace_api ? 1 : 0,
-        r.command_pipeline_adapter ? 1 : 0);
+        r.command_pipeline_adapter ? 1 : 0,
+        r.rage_config_adapter ? 1 : 0);
     FileLog::Log(buf);
 
     std::snprintf(buf, sizeof(buf),
-        "[P4COMPAT] RUNTIME local_pair=%d sdk_safe=%d input=%d prediction=%d trace=%d command=%d entities=%d bones=%d hitboxes=%d rich_trace=%d",
+        "[P4COMPAT] RUNTIME local_pair=%d sdk_safe=%d input=%d prediction=%d trace=%d command=%d entities=%d bones=%d hitboxes=%d rich_trace=%d config=%d",
         r.local_pair ? 1 : 0,
         r.sdk_deref_safe ? 1 : 0,
         r.input_runtime ? 1 : 0,
@@ -179,7 +186,8 @@ inline void log_readiness(const LocalPlayerSnapshot& snapshot) {
         r.entity_cache_runtime ? 1 : 0,
         r.bone_runtime ? 1 : 0,
         r.hitbox_runtime ? 1 : 0,
-        r.rich_trace_runtime ? 1 : 0);
+        r.rich_trace_runtime ? 1 : 0,
+        r.rage_config_runtime ? 1 : 0);
     FileLog::Log(buf);
 
     std::snprintf(buf, sizeof(buf),
