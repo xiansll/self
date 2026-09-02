@@ -1,9 +1,8 @@
 #pragma once
 
-// Phase 3C is diagnostic-only. This checkpoint validates only resolver health
-// and pointer parity. It deliberately does NOT dereference pointer-only locals
-// through TempleWare entity wrappers. Deeper wrapper/identity/scene validation
-// is enabled only in a later checkpoint after the SDK resolvers are proven.
+// Phase 3C is diagnostic-only. This checkpoint validates resolver provenance,
+// scanner/module health, and pointer parity. It deliberately does NOT
+// dereference pointer-only locals through TempleWare entity wrappers.
 
 #include <Windows.h>
 #include <cstdint>
@@ -11,13 +10,14 @@
 
 #include "../filelog/filelog.h"
 #include "../localplayer/localplayer.h"
+#include "../module/module.h"
 #include "../../interfaces/interfaces.h"
 #include "../../interfaces/IEntitySystem/IEntitySystem.h"
 
 namespace Phase3C {
 
 inline void LogSimple(const char* stage, const char* status, const char* detail = nullptr) {
-    char buf[640];
+    char buf[768];
     if (detail && *detail)
         std::snprintf(buf, sizeof(buf), "[P3C][%s] %s - %s", stage, status, detail);
     else
@@ -26,8 +26,8 @@ inline void LogSimple(const char* stage, const char* status, const char* detail 
 }
 
 inline void Run(const LocalPlayerSnapshot& snapshot) {
-    // Re-run only when the selected local pair changes. This gives one concise
-    // checkpoint trace at spawn/respawn without per-frame diagnostic spam.
+    // Re-run only when the selected local pair changes. This keeps the heavier
+    // strict scanner diagnostics out of the per-frame path.
     static std::uintptr_t s_lastPawn = 0;
     static std::uintptr_t s_lastController = 0;
     static unsigned int s_run = 0;
@@ -48,23 +48,86 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         reinterpret_cast<void*>(snapshot.pawn),
         reinterpret_cast<void*>(snapshot.controller),
         snapshot.sdk_deref_safe ? 1 : 0);
-    LogSimple("BEGIN", "RESOLVER GATE", beginBuf);
+    LogSimple("BEGIN", "RESOLVER/PROVENANCE GATE", beginBuf);
+
+    const HMODULE winClient = GetModuleHandleA("client.dll");
+    const std::uintptr_t registryClient = modules.getModule("client");
+    char moduleBuf[320];
+    std::snprintf(moduleBuf, sizeof(moduleBuf),
+        "GetModuleHandle(client.dll)=%p registry(client)=%p",
+        static_cast<void*>(winClient),
+        reinterpret_cast<void*>(registryClient));
+    const bool moduleReady = winClient != nullptr && registryClient != 0;
+    LogSimple("S0 module-health", moduleReady ? "PASS" : "FAIL", moduleBuf);
 
     if (!I::EntitySystem) {
         LogSimple("S1 resolver-addresses", "FAIL", "I::EntitySystem is null");
+        LogSimple("DIAGNOSIS", "BLOCKER", "entity-system interface missing; resolver scan analysis stopped");
         LogSimple("GATE", "BLOCKED", "deep SDK validation disabled");
         return;
     }
 
+    // Cached addresses are the exact resolver values used by the normal SDK
+    // getters. Raw/candidate values are fresh diagnostic scans using the same
+    // already-existing patterns. None of these calls invoke a game function.
     void* pawnResolver = I::EntitySystem->diagnostic_local_pawn_resolver();
     void* controllerResolver = I::EntitySystem->diagnostic_local_controller_resolver();
+    void* pawnRaw = I::EntitySystem->diagnostic_local_pawn_raw_match();
+    void* pawnCandidate = I::EntitySystem->diagnostic_local_pawn_absolute_candidate();
+    void* controllerRaw = I::EntitySystem->diagnostic_local_controller_raw_match();
+
+    char scanBuf[640];
+    std::snprintf(scanBuf, sizeof(scanBuf),
+        "pawn_raw=%p pawn_candidate=%p pawn_cached=%p ctrl_raw=%p ctrl_cached=%p",
+        pawnRaw, pawnCandidate, pawnResolver, controllerRaw, controllerResolver);
+
+    const bool pawnPatternReady = pawnRaw != nullptr && pawnCandidate != nullptr;
+    const bool controllerPatternReady = controllerRaw != nullptr;
+    const bool strictPatternsReady = pawnPatternReady && controllerPatternReady;
+    LogSimple("S1 strict-scan", strictPatternsReady ? "PASS" : "FAIL", scanBuf);
+
+    const bool pawnCacheParity = pawnResolver && pawnCandidate && pawnResolver == pawnCandidate;
+    const bool controllerCacheParity = controllerResolver && controllerRaw && controllerResolver == controllerRaw;
+    const bool cacheParity = pawnCacheParity && controllerCacheParity;
+
+    char parityBuf[256];
+    std::snprintf(parityBuf, sizeof(parityBuf),
+        "pawn_cache_match=%d controller_cache_match=%d",
+        pawnCacheParity ? 1 : 0,
+        controllerCacheParity ? 1 : 0);
+    LogSimple("S1.1 cache-parity", cacheParity ? "PASS" : "FAIL", parityBuf);
+
+    // Produce one useful root-cause classification instead of just another null
+    // address. This is intentionally conservative: it identifies the failing
+    // layer but does not update signatures, offsets, call arguments, or hooks.
+    if (!winClient) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "client.dll is not visible through Win32 module lookup");
+    }
+    else if (!registryClient) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "client module is loaded but TempleWare module registry has no 'client' entry");
+    }
+    else if (!pawnPatternReady && pawnResolver) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "pawn strict scan misses while cached resolver is non-null; scanner false-positive/stale-cache path suspected");
+    }
+    else if (!pawnPatternReady || !controllerPatternReady) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "one or more existing resolver patterns do not match the currently loaded client module");
+    }
+    else if (!pawnResolver || !controllerResolver) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "fresh raw patterns resolve but cached resolver is null; one-shot null cache/init-order path suspected");
+    }
+    else if (!cacheParity) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "fresh resolver candidate differs from the cached resolver address");
+    }
+    else {
+        LogSimple("DIAGNOSIS", "SCAN LAYER READY", "module, strict patterns, and cached resolver addresses are coherent; pointer-call parity is next gate");
+    }
 
     char resolverBuf[256];
     std::snprintf(resolverBuf, sizeof(resolverBuf),
         "pawn=%p controller=%p", pawnResolver, controllerResolver);
 
     const bool resolverAddressesReady = pawnResolver && controllerResolver;
-    LogSimple("S1 resolver-addresses", resolverAddressesReady ? "PASS" : "FAIL", resolverBuf);
+    LogSimple("S2 resolver-addresses", resolverAddressesReady ? "PASS" : "FAIL", resolverBuf);
 
     C_CSPlayerPawn* sdkPawn = nullptr;
     CCSPlayerController* sdkController = nullptr;
@@ -72,7 +135,7 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     bool controllerCallException = false;
 
     if (pawnResolver) {
-        LogSimple("S2.1 EntitySystem::get_local_pawn", "ENTER");
+        LogSimple("S3.1 EntitySystem::get_local_pawn", "ENTER");
         __try {
             sdkPawn = I::EntitySystem->get_local_pawn();
         }
@@ -80,7 +143,7 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
             pawnCallException = true;
             char buf[128];
             std::snprintf(buf, sizeof(buf), "exception=0x%08lX", GetExceptionCode());
-            LogSimple("S2.1 EntitySystem::get_local_pawn", "FAIL", buf);
+            LogSimple("S3.1 EntitySystem::get_local_pawn", "FAIL", buf);
         }
 
         if (!pawnCallException) {
@@ -92,17 +155,17 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
                     static_cast<void*>(sdkPawn),
                     reinterpret_cast<void*>(snapshot.pawn),
                     match ? 1 : 0);
-                LogSimple("S2.1 EntitySystem::get_local_pawn", match ? "PASS" : "FAIL", buf);
+                LogSimple("S3.1 EntitySystem::get_local_pawn", match ? "PASS" : "FAIL", buf);
             } else {
-                LogSimple("S2.1 EntitySystem::get_local_pawn", "FAIL", "result=null");
+                LogSimple("S3.1 EntitySystem::get_local_pawn", "FAIL", "result=null");
             }
         }
     } else {
-        LogSimple("S2.1 EntitySystem::get_local_pawn", "SKIP", "resolver address missing");
+        LogSimple("S3.1 EntitySystem::get_local_pawn", "SKIP", "cached resolver address missing");
     }
 
     if (controllerResolver) {
-        LogSimple("S2.2 EntitySystem::get_local_controller", "ENTER");
+        LogSimple("S3.2 EntitySystem::get_local_controller", "ENTER");
         __try {
             sdkController = reinterpret_cast<CCSPlayerController*>(I::EntitySystem->get_local_controller());
         }
@@ -110,7 +173,7 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
             controllerCallException = true;
             char buf[128];
             std::snprintf(buf, sizeof(buf), "exception=0x%08lX", GetExceptionCode());
-            LogSimple("S2.2 EntitySystem::get_local_controller", "FAIL", buf);
+            LogSimple("S3.2 EntitySystem::get_local_controller", "FAIL", buf);
         }
 
         if (!controllerCallException) {
@@ -122,19 +185,19 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
                     static_cast<void*>(sdkController),
                     reinterpret_cast<void*>(snapshot.controller),
                     match ? 1 : 0);
-                LogSimple("S2.2 EntitySystem::get_local_controller", match ? "PASS" : "FAIL", buf);
+                LogSimple("S3.2 EntitySystem::get_local_controller", match ? "PASS" : "FAIL", buf);
             } else {
-                LogSimple("S2.2 EntitySystem::get_local_controller", "FAIL", "result=null");
+                LogSimple("S3.2 EntitySystem::get_local_controller", "FAIL", "result=null");
             }
         }
     } else {
-        LogSimple("S2.2 EntitySystem::get_local_controller", "SKIP", "resolver address missing");
+        LogSimple("S3.2 EntitySystem::get_local_controller", "SKIP", "cached resolver address missing");
     }
 
     const bool providerAlias = I::GameEntity &&
         reinterpret_cast<std::uintptr_t>(I::GameEntity->Instance) ==
         reinterpret_cast<std::uintptr_t>(I::EntitySystem);
-    LogSimple("S2.3 provider-alias", providerAlias ? "PASS" : "FAIL",
+    LogSimple("S3.3 provider-alias", providerAlias ? "PASS" : "FAIL",
         providerAlias ? "GameEntity.Instance == I::EntitySystem" : "providers differ");
 
     const bool pawnMatches = sdkPawn &&
@@ -142,14 +205,14 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     const bool controllerMatches = sdkController &&
         reinterpret_cast<std::uintptr_t>(sdkController) == snapshot.controller;
 
-    const bool gateReady = resolverAddressesReady && providerAlias &&
-        pawnMatches && controllerMatches &&
+    const bool gateReady = moduleReady && strictPatternsReady && cacheParity &&
+        resolverAddressesReady && providerAlias && pawnMatches && controllerMatches &&
         !pawnCallException && !controllerCallException;
 
     if (gateReady) {
-        LogSimple("GATE", "PASS", "SDK resolver pair matches reference locals; deeper validation remains disabled until next checkpoint");
+        LogSimple("GATE", "PASS", "resolver provenance and local pointer parity are proven; deep wrapper validation remains separately disabled");
     } else {
-        LogSimple("GATE", "BLOCKED", "SDK resolver pair is not proven; S3-S7 wrapper/identity/scene probes disabled");
+        LogSimple("GATE", "BLOCKED", "resolver provenance is not fully proven; wrapper/identity/scene probes remain disabled");
     }
 }
 
