@@ -18,8 +18,7 @@ namespace {
         ClientGlobals = 4
     };
 
-    // These are not new offsets: this is the same already-proven runtime path
-    // used by source/nerv/nerv_bridge.cpp in the current project/build.
+    // Same already-existing runtime source used by nerv_bridge.cpp.
     constexpr std::uintptr_t kLocalPlayerPawnOffset = 0x23C6268;
     constexpr std::uintptr_t kLocalPlayerControllerOffset = 0x23A0F30;
 
@@ -32,9 +31,6 @@ namespace {
         if (!clientBase)
             return;
 
-        // The offsets are version-specific. Keep this fallback fail-closed so a
-        // stale build produces nullptr diagnostics instead of taking the process
-        // down while Phase3A is validating the provider plumbing.
         __try {
             pawn = *reinterpret_cast<C_CSPlayerPawn**>(clientBase + kLocalPlayerPawnOffset);
             controller = *reinterpret_cast<CCSPlayerController**>(clientBase + kLocalPlayerControllerOffset);
@@ -46,6 +42,7 @@ namespace {
     }
 
     void LogProviderState(LocalProvider provider,
+                          bool sdkDerefSafe,
                           C_CSPlayerPawn* entitySystemPawn,
                           CCSPlayerController* entitySystemController,
                           C_CSPlayerPawn* gameResourcePawn,
@@ -56,19 +53,21 @@ namespace {
         using namespace std::chrono;
         static steady_clock::time_point lastLog{};
         static LocalProvider lastProvider = LocalProvider::None;
+        static bool lastSdkDerefSafe = false;
 
         const auto now = steady_clock::now();
-        const bool providerChanged = provider != lastProvider;
+        const bool providerChanged = provider != lastProvider || sdkDerefSafe != lastSdkDerefSafe;
         const bool intervalElapsed = lastLog.time_since_epoch().count() == 0 ||
             duration_cast<milliseconds>(now - lastLog).count() >= 1000;
 
         if (!providerChanged && !intervalElapsed)
             return;
 
-        char buf[768];
+        char buf[832];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] LocalProvider: selected=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p client=%p cg_pawn=%p cg_ctrl=%p",
+            "[Validation] LocalProvider: selected=%d sdk_safe=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p client=%p cg_pawn=%p cg_ctrl=%p",
             static_cast<int>(provider),
+            sdkDerefSafe ? 1 : 0,
             static_cast<void*>(I::EntitySystem),
             static_cast<void*>(entitySystemPawn),
             static_cast<void*>(entitySystemController),
@@ -82,6 +81,7 @@ namespace {
         FileLog::Log(buf);
 
         lastProvider = provider;
+        lastSdkDerefSafe = sdkDerefSafe;
         lastLog = now;
     }
 }
@@ -116,10 +116,6 @@ void LocalPlayerCache::update() {
     std::uintptr_t clientBase = 0;
     ReadClientGlobalLocals(clientGlobalPawn, clientGlobalController, clientBase);
 
-    // Prefer the SDK paths when they work. The current runtime log proves both
-    // SDK local-accessor functions resolve to nullptr while the existing nerv
-    // client-global path resolves a live pawn, so use that same proven source as
-    // the final fallback rather than inventing another signature.
     C_CSPlayerPawn* local_pawn = entitySystemPawn ? entitySystemPawn :
         (gameResourcePawn ? gameResourcePawn : clientGlobalPawn);
     CCSPlayerController* local_controller = entitySystemController ? entitySystemController :
@@ -148,7 +144,16 @@ void LocalPlayerCache::update() {
     else if (usedClientGlobals)
         provider = LocalProvider::ClientGlobals;
 
+    // A client-global pointer can be a valid live game pointer while still not
+    // being safe to dereference through TempleWare's entity wrapper/layout.
+    // Only SDK-resolved pointers are allowed into deep wrapper calls here.
+    const bool pawnSdkSafe = !local_pawn || local_pawn == entitySystemPawn || local_pawn == gameResourcePawn;
+    const bool controllerSdkSafe = !local_controller ||
+        local_controller == entitySystemController || local_controller == gameResourceController;
+    const bool sdkDerefSafe = pawnSdkSafe && controllerSdkSafe;
+
     LogProviderState(provider,
+                     sdkDerefSafe,
                      entitySystemPawn,
                      entitySystemController,
                      gameResourcePawn,
@@ -161,18 +166,21 @@ void LocalPlayerCache::update() {
     m_snapshot.pawn = reinterpret_cast<std::uintptr_t>(local_pawn);
     m_snapshot.observer_pawn = 0;
     m_snapshot.observer_controller = 0;
+    m_snapshot.sdk_deref_safe = sdkDerefSafe;
 
-    if (local_pawn) {
+    if (local_pawn && pawnSdkSafe) {
         m_snapshot.team = local_pawn->m_iTeamNum();
         m_snapshot.is_alive = local_pawn->is_alive();
         m_snapshot.is_team_mode = true;
     } else {
+        // Pointer-only fallback: do not interpret the object with TempleWare's
+        // wrapper until layout compatibility is separately proven.
         m_snapshot.team = 0;
         m_snapshot.is_alive = false;
         m_snapshot.is_team_mode = false;
     }
 
-    if (local_controller) {
+    if (local_controller && controllerSdkSafe) {
         if (auto observer_pawn_handle = local_controller->m_hObserverPawn(); observer_pawn_handle.valid()) {
             C_CSPlayerPawn* observer_pawn = nullptr;
             if (I::GameEntity && I::GameEntity->Instance)
