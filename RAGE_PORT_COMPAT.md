@@ -37,7 +37,7 @@ Velocity therefore cannot be dropped into TempleWare as a single `rage.cpp` file
 | Entity cache / lookup | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
 | Bones | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
 | Hitboxes | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
-| Rage settings | TempleWare config schema does not match Velocity Rage settings | Add a separate config adapter; keep it isolated from runtime behaviour |
+| Rage settings | Isolated config contract exists | TempleWare->Velocity translation/runtime publication remains gated |
 | CreateMove lifecycle | Non-operational lifecycle contract exists | Runtime command acquisition stays disabled until a separately validated source is available |
 
 ## Current Runtime Blockers
@@ -46,7 +46,7 @@ Phase 3C currently treats the live local pawn/controller as pointer-only because
 
 The current trace service also exposes an API contract but is not runtime-ready when its required internal functions fail to resolve. Compatibility code must keep `trace_runtime=false` in that state rather than treating API presence as proof of a working trace backend.
 
-Therefore compatibility work may proceed at the type/adapter level, but any adapter that requires entity layout interpretation, an active command source, or live tracing remains closed until its runtime gate is green.
+Therefore compatibility work may proceed at the type/adapter level, but any adapter that requires entity layout interpretation, an active command source, live tracing, or live config translation remains closed until its runtime gate is green.
 
 ## Phase 4 Compatibility Checkpoints
 
@@ -80,22 +80,28 @@ The contract is considered present at compile time, but `command_runtime` intent
 
 Contract layer implemented by `source/templeware/compat/velocity_data_compat.h`.
 
-It now provides non-operational compatibility shapes for:
+It provides non-operational compatibility shapes for:
 
 - entity references
 - bone poses and skeleton snapshots
 - hitbox entries and hitbox sets
 - rich trace results
 
-The compile-time adapter flags are now separate from runtime producer flags. This means `entities/bones/hitboxes/rich_trace` may report adapter=1 while the corresponding runtime state remains 0. No live entity, bone, hitbox, or trace acquisition was added by this checkpoint.
+The compile-time adapter flags are separate from runtime producer flags. This means `entities/bones/hitboxes/rich_trace` may report adapter=1 while the corresponding runtime state remains 0. No live entity, bone, hitbox, or trace acquisition was added by this checkpoint.
 
 ### P4D - Config adapter
 
-Required later:
+Contract implemented by `source/templeware/compat/velocity_config_compat.h`.
 
-- isolate Velocity-facing settings from TempleWare's existing config structs
-- keep UI/config serialization independent from combat execution
-- use a translation layer rather than making ported code read GUI globals directly
+It provides:
+
+- an isolated `rage_config_snapshot`
+- version/revision metadata for future translation diagnostics
+- a TempleWare-owned publish/get/reset store
+- separate compile-time `rage_config_adapter` and runtime `rage_config_runtime` readiness
+- no direct dependency on GUI globals and no gameplay behaviour
+
+The config contract may therefore report adapter=1 while runtime config remains 0 until a validated TempleWare->Velocity translation publishes a snapshot.
 
 ## Port Gate
 
@@ -112,7 +118,8 @@ The compatibility gate stays BLOCKED until all of these are true:
 9. bone contract exists and its runtime producer is proven
 10. hitbox contract exists and its runtime producer is proven
 11. rich trace contract exists and its runtime producer is proven
-12. Rage config adapter exists
+12. Rage config contract exists
+13. Rage config runtime translation/publication is proven
 
 Only after that should the Velocity Rage source be mechanically adapted against the compatibility interfaces.
 
