@@ -1,5 +1,6 @@
 ﻿#include "hooks.h"
 #include <iostream>
+#include <atomic>
 
 #include "../../../external/kiero/minhook/include/MinHook.h"
 
@@ -32,6 +33,13 @@ extern bool g_showMenu; // defined in main.cpp (global scope)
 #include "../utils/localplayer/localplayer.h"
 #include "../utils/validation/validation.h"
 
+namespace {
+    // The active Phase3A path installs only FrameStageNotify for lifecycle and
+    // diagnostic validation. This flag prevents that validation-only hook from
+    // accidentally executing unrelated legacy feature callbacks.
+    std::atomic<bool> s_validationOnlyMode{false};
+}
+
 void* H::hkOnAddEntity(void* a1, CEntityInstance* entity_instance, int handle)
 {
 	static auto original = H::OnAddEntity.GetOriginal();
@@ -62,6 +70,8 @@ void __fastcall H::hkFrameStageNotify(void* a1, int stage)
 	}
 
 	original(a1, stage);
+	if (!I::EngineClient || !I::EntitySystem)
+		return;
 	if (!I::EngineClient->connected() || !I::EngineClient->in_game())
 		return;
 
@@ -79,7 +89,14 @@ void __fastcall H::hkFrameStageNotify(void* a1, int stage)
 		Validation::OnEntityIdentityCheck(g_ctx->local_controller);
 	}
 
-	// Old TempleWare apply path disabled — replaced by the ported nerv engine.
+	Validation::LogPeriodicSummary(I::GlobalVars ? I::GlobalVars->m_tick_count : 0);
+
+	// Phase3A validation-only runtime must not activate unrelated legacy
+	// gameplay/feature callbacks merely to validate lifecycle plumbing.
+	if (s_validationOnlyMode.load(std::memory_order_relaxed))
+		return;
+
+	// Legacy/full path only.
 	// features::skinchanger::OnFrameStageNotify();
 	nerv_bridge::on_frame(stage, ::g_showMenu);
 
@@ -87,8 +104,6 @@ void __fastcall H::hkFrameStageNotify(void* a1, int stage)
 		Esp::cache();
 		Aimbot();
 	}
-
-	Validation::LogPeriodicSummary(I::GlobalVars ? I::GlobalVars->m_tick_count : 0);
 }
 
 void* __fastcall H::hkLevelInit(__int64 a1, __int64 a2) {
@@ -163,9 +178,28 @@ void __fastcall H::hkCreateMove(CCSGOInput* rcx, int slot, bool active)
 		user_cmd->nButtons.nValue |= IN_MOVERIGHT;
 }
 
-void H::Hooks::init() {
-
+bool H::Hooks::initValidation() {
 	Validation::Initialize();
+	s_validationOnlyMode.store(true, std::memory_order_relaxed);
+
+	void* frameStageTarget = (void*)M::patternScan("client", ("48 89 5C 24 ? 48 89 6C 24 ? 57 48 83 EC 40 48 8B F9 33 ED"));
+	const bool installed = FrameStageNotify.Add(frameStageTarget, &hkFrameStageNotify);
+	if (installed) {
+		Validation::LogFramestageHookInstalled();
+	} else {
+		Validation::LogFramestageHookFailed();
+	}
+
+	return installed;
+}
+
+void H::Hooks::init() {
+	// Full/legacy path. Reuse the validated lifecycle hook setup, then explicitly
+	// leave validation-only mode before installing unrelated legacy hooks.
+	if (!FrameStageNotify.IsHooked()) {
+		initValidation();
+	}
+	s_validationOnlyMode.store(false, std::memory_order_relaxed);
 
 	oGetWeaponData = *reinterpret_cast<int*>(M::patternScan("client", ("48 8B 81 ? ? ? ? 85 D2 78 ? 48 83 FA ? 73 ? F3 0F 10 84 90 ? ? ? ? C3 F3 0F 10 80 ? ? ? ? C3 CC CC CC CC")) + 0x3);
 	ogGetBaseEntity = reinterpret_cast<decltype(ogGetBaseEntity)>(M::patternScan("client", ("4C 8D 49 10 81 FA FE 7F 00 00 ? ? 8B CA C1 F9 09 83 F9 3F ? ? 48 63 C1 4D"))); // String: Found no entity at %d.\n and Press Double Click on v4 and then on Return.
@@ -185,9 +219,6 @@ void H::Hooks::init() {
 		}
 	}
 
-	// Default
-	FrameStageNotify.Add((void*)M::patternScan("client", ("48 89 5C 24 ? 48 89 6C 24 ? 57 48 83 EC 40 48 8B F9 33 ED")), &hkFrameStageNotify);
-	Validation::LogFramestageHookInstalled();
 	// DrawArray.Add((void*)M::patternScan("scenesystem", ("48 8B C4 53 57 41 54 48 81 EC D0 00 00 00 49 63 F9 49")), &chams::hook);
 	GetRenderFov.Add((void*)M::patternScan("client", "40 53 48 83 EC ? 48 8B D9 E8 ? ? ? ? 48 85 C0 74 ? 48 8B C8 48 83 C4"), &hkGetRenderFov);
 	LevelInit.Add((void*)M::patternScan("client", "48 89 74 24 ? 57 48 83 EC ? 48 8B 0D ? ? ? ? 48 8B FA"), &hkLevelInit);
