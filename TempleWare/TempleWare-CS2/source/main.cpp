@@ -105,28 +105,76 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         foundationInit = g_templeWare.initFoundation();
     }
 
-    // Phase3A regression-isolation path. Present is already proven to execute,
-    // so use it to validate local-player plumbing without installing the
-    // suspect FrameStageNotify detour.
+    // Present is the proven-safe Phase 3 runtime validation path. Keep the
+    // suspect FrameStageNotify detour disabled while Phase 3B validates local
+    // provider/lifecycle behavior.
     if (foundationInit)
     {
         static bool s_presentDiagnosticLogged = false;
+        static bool s_phase3bActiveLogged = false;
+        static bool s_providerOkLogged = false;
+        static bool s_controllerOkLogged = false;
+        static bool s_pawnChangeLogged = false;
+        static bool s_lifecycleOkLogged = false;
+        static bool s_wasInGame = false;
+        static std::uintptr_t s_lastPawn = 0;
+
         if (!s_presentDiagnosticLogged)
         {
             FileLog::Log("[Validation] PRESENT DIAGNOSTIC FIRST CALL");
             s_presentDiagnosticLogged = true;
         }
 
-        const bool hasEntityProvider =
-            I::EntitySystem != nullptr ||
-            (I::GameEntity && I::GameEntity->Instance);
-
-        if (I::EngineClient && hasEntityProvider &&
-            I::EngineClient->connected() && I::EngineClient->in_game())
+        if (!s_phase3bActiveLogged)
         {
+            FileLog::Log("[P3B] ACTIVE - LOCAL RUNTIME/LIFECYCLE VALIDATION");
+            s_phase3bActiveLogged = true;
+        }
+
+        const bool inGame = I::EngineClient &&
+            I::EngineClient->connected() && I::EngineClient->in_game();
+
+        if (inGame)
+        {
+            // LocalPlayerCache owns provider selection. This remains pointer-only
+            // when the selected source is not proven safe for TempleWare wrapper
+            // dereferences.
             g_local_player_cache->update();
             const LocalPlayerSnapshot snapshot = g_local_player_cache->get();
             Validation::OnLocalPlayerCacheUpdate(snapshot);
+
+            if (!s_providerOkLogged && snapshot.pawn && snapshot.controller)
+            {
+                char buf[256];
+                std::snprintf(buf, sizeof(buf),
+                    "[P3B] LOCAL PROVIDER OK pawn=%p controller=%p sdk_safe=%d",
+                    reinterpret_cast<void*>(snapshot.pawn),
+                    reinterpret_cast<void*>(snapshot.controller),
+                    snapshot.sdk_deref_safe ? 1 : 0);
+                FileLog::Log(buf);
+                s_providerOkLogged = true;
+            }
+
+            if (!s_controllerOkLogged && snapshot.controller)
+            {
+                FileLog::Log("[P3B] CONTROLLER OK");
+                s_controllerOkLogged = true;
+            }
+
+            if (snapshot.pawn)
+            {
+                if (!s_pawnChangeLogged && s_lastPawn && snapshot.pawn != s_lastPawn)
+                {
+                    char buf[256];
+                    std::snprintf(buf, sizeof(buf),
+                        "[P3B] PAWN CHANGE OK old=%p new=%p",
+                        reinterpret_cast<void*>(s_lastPawn),
+                        reinterpret_cast<void*>(snapshot.pawn));
+                    FileLog::Log(buf);
+                    s_pawnChangeLogged = true;
+                }
+                s_lastPawn = snapshot.pawn;
+            }
 
             if (snapshot.sdk_deref_safe)
             {
@@ -154,6 +202,38 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
             Validation::LogPeriodicSummary(0);
         }
+        else if (s_wasInGame)
+        {
+            // Validate the cache lifecycle without re-enabling a game lifecycle
+            // hook: Present observes the in-game -> out-of-game transition and
+            // performs the reset directly.
+            g_local_player_cache->reset();
+            Validation::OnLocalPlayerCacheReset();
+            const LocalPlayerSnapshot resetSnapshot = g_local_player_cache->get();
+
+            const bool cleanReset =
+                resetSnapshot.pawn == 0 &&
+                resetSnapshot.controller == 0 &&
+                resetSnapshot.observer_pawn == 0 &&
+                resetSnapshot.observer_controller == 0;
+
+            if (cleanReset)
+            {
+                if (!s_lifecycleOkLogged)
+                {
+                    FileLog::Log("[P3B] LIFECYCLE OK - CACHE RESET CLEAN");
+                    s_lifecycleOkLogged = true;
+                }
+            }
+            else
+            {
+                FileLog::Log("[P3B] LIFECYCLE FAILED - CACHE NOT CLEAN AFTER RESET");
+            }
+
+            s_lastPawn = 0;
+        }
+
+        s_wasInGame = inGame;
     }
 
     ImGui_ImplDX11_NewFrame();
