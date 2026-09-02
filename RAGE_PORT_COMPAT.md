@@ -2,13 +2,13 @@
 
 ## Goal
 
-Prepare TempleWare so the Velocity combat/rage subsystem can be ported through explicit adapters instead of direct copy/paste.
+Prepare TempleWare so the Velocity combat/rage subsystem can be mechanically adapted through explicit TempleWare-owned contracts instead of direct copy/paste.
 
-This document is about architecture, dependency mapping, compile/runtime validation, and lifecycle safety. It does not enable Rage behaviour and it does not add new game signatures/offsets.
+This plan covers architecture, dependency mapping, compile/runtime validation, ownership, and lifecycle safety. It does not enable Rage behaviour and does not add new game signatures/offsets.
 
-## What Velocity Rage Depends On
+## Why Direct Copy/Paste Does Not Work
 
-The Velocity `combat.hpp` / Rage declarations are not self-contained. They depend on a broad `systems` layer, including:
+Velocity `combat.hpp` is built on a broad `systems` layer rather than being a self-contained Rage class. Its combat code consumes, among other things:
 
 - `systems::local::snapshot`
 - `systems::input::usercmd`
@@ -18,111 +18,144 @@ The Velocity `combat.hpp` / Rage declarations are not self-contained. They depen
 - bones and skeleton data
 - hitbox queries
 - tracing results/filters
-- shared combat state and lag-record containers
-- configuration types
+- shared combat state
+- configuration/settings state
 - a CreateMove-style command lifecycle
 
-Velocity therefore cannot be dropped into TempleWare as a single `rage.cpp` file.
+TempleWare therefore needs a stable compatibility boundary before any mechanical source adaptation is attempted.
 
-## TempleWare Mapping
+## Current TempleWare Mapping
 
-| Velocity dependency | TempleWare status | Port action |
+| Velocity dependency | TempleWare compatibility status | Runtime status |
 |---|---|---|
-| `math::vector2/vector3` | Available | Use `VelocityRageCompat::vector2/vector3` aliases |
-| `systems::input::usercmd` | Type available as `CUserCmd` | Use compatibility alias; runtime command source remains gated |
-| `systems::local::snapshot` | Shape available as `LocalPlayerSnapshot` | Use `VelocityRageCompat::local_state` adapter |
-| Local pawn/controller lifecycle | Pointer-only provider works | Keep provenance gate; do not deep-deref until `sdk_deref_safe` is proven |
-| Prediction object | Existing `C_Prediction` exists | Treat as partial until its runtime contract is validated for the port |
-| Basic line trace | Existing `Trace` service exists, runtime currently unresolved | Rich trace DTO contract exists; runtime producer remains gated |
-| Entity cache / lookup | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
-| Bones | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
-| Hitboxes | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
-| Rage settings | Isolated config contract exists | TempleWare->Velocity translation/runtime publication remains gated |
-| CreateMove lifecycle | Non-operational lifecycle contract exists | Runtime command acquisition stays disabled until a separately validated source is available |
+| vector/angle types | contract available | compile-time only |
+| `systems::input::usercmd` | `CUserCmd` alias + command lifecycle contract | no active command producer on Present path |
+| `systems::local::snapshot` | `local_state` adapter | pointer pair available, SDK dereference safety blocked |
+| prediction object/state | object exists + prediction-state POD contract | semantic runtime proof not yet opened for the port |
+| entities | entity reference/cache POD contract | producer closed |
+| bones | bone/skeleton POD contract | producer closed |
+| hitboxes | hitbox POD contract | producer closed |
+| tracing | basic TempleWare API + rich trace POD contract | backend currently unresolved, producer closed |
+| Rage settings ownership | isolated versioned config store | disabled default snapshot published safely |
+| port/update context | single read-only TempleWare-owned context | active on Present diagnostic path |
+
+## Phase 4 — Compatibility Contracts
+
+Phase 4 compile-time compatibility is CLOSED.
+
+Implemented:
+
+- `source/templeware/compat/velocity_rage_compat.h`
+- `source/templeware/compat/velocity_command_compat.h`
+- `source/templeware/compat/velocity_data_compat.h`
+- `source/templeware/compat/velocity_config_compat.h`
+- `source/templeware/compat/velocity_runtime_compat.h`
+
+### Contract vs Runtime Rule
+
+A contract existing does not prove its live producer.
+
+Examples:
+
+- entity adapter can be `1` while entity runtime is `0`
+- bone adapter can be `1` while bone runtime is `0`
+- config contract can be `1` while a real GUI/settings translation is absent
+
+This separation is deliberate and prevents non-null pointers or readable memory from being treated as semantic SDK proof.
+
+## Central Runtime Lifecycle
+
+`velocity_runtime_compat.h` owns the compatibility runtime epoch and volatile readiness states.
+
+Volatile state:
+
+- command publication
+- entity-cache readiness
+- bone readiness
+- hitbox readiness
+- rich-trace readiness
+
+On an in-game -> out-of-game transition, all volatile compatibility state is reset from one place. Config remains published because its ownership is process-lifetime rather than map-lifetime.
+
+At DLL shutdown, volatile state and config ownership are both cleared.
+
+## Config Runtime
+
+The compatibility config store now receives a disabled default snapshot after foundation initialization.
+
+This proves only:
+
+- store ownership
+- publication lifecycle
+- generation tracking
+
+It does not translate existing TempleWare aim/anti-aim settings and does not enable gameplay behaviour.
+
+## Phase 5A — Read-only Port Context
+
+Implemented by `source/templeware/compat/velocity_port_context.h`.
+
+This provides one TempleWare-owned snapshot for future mechanically adapted Velocity consumers containing:
+
+- adapted local state
+- in-game state
+- current compatibility gate state
+- frame sequence
+- runtime epoch
+- command generation
+- config generation
+
+The context is updated from the existing Present diagnostic path and reset on disconnect/shutdown. It does not acquire game data or run feature callbacks.
 
 ## Current Runtime Blockers
 
-Phase 3C currently treats the live local pawn/controller as pointer-only because the TempleWare SDK local resolver path is not proven. A non-null fallback pointer is not sufficient evidence that TempleWare entity wrapper methods can safely interpret the object.
+### 1. SDK-safe local entity interpretation
 
-The current trace service also exposes an API contract but is not runtime-ready when its required internal functions fail to resolve. Compatibility code must keep `trace_runtime=false` in that state rather than treating API presence as proof of a working trace backend.
+The active local provider can expose pawn/controller pointer values, but the TempleWare SDK local resolver path is still unresolved. Therefore `sdk_deref_safe` remains false and pointer-only locals must not be interpreted through TempleWare wrappers.
 
-Therefore compatibility work may proceed at the type/adapter level, but any adapter that requires entity layout interpretation, an active command source, live tracing, or live config translation remains closed until its runtime gate is green.
+### 2. Trace backend
 
-## Phase 4 Compatibility Checkpoints
+The TempleWare Trace API contract exists, but its current runtime backend is not ready when required internal functions fail to resolve. No replacement pattern/signature has been introduced by the compatibility work.
 
-### P4A - Type/runtime contract
+### 3. Command producer
 
-Implemented by `source/templeware/compat/velocity_rage_compat.h`.
+The command lifecycle contract exists, but the safe Present diagnostic path has no live `CUserCmd*` producer. Runtime command readiness remains false.
 
-It provides:
+### 4. Entity/bone/hitbox/rich-trace producers
 
-- common type aliases
-- a stable local-state adapter
-- a runtime readiness report
-- a single compatibility gate
-- `[P4COMPAT]` logging without game-state writes or deep pointer dereferences
+POD contracts exist, but no producer is marked ready until its TempleWare source is independently validated.
 
-### P4B - Command lifecycle adapter
+## Acceleration Rule
 
-Contract implemented by `source/templeware/compat/velocity_command_compat.h`.
+Do not return to one-header-per-build pacing.
 
-It provides:
+Batch these together:
 
-- one TempleWare-owned location for a future validated `CUserCmd*`
-- explicit begin/end/reset ownership
-- a generation counter for lifecycle diagnostics
-- separate `command_pipeline_adapter` and `command_runtime` readiness states
-- no CreateMove hook installation, command acquisition, or command mutation
+- compile-time contract alignment
+- ownership refactors
+- logging cleanup
+- context aggregation
+- docs/handoff work
 
-The contract is considered present at compile time, but `command_runtime` intentionally remains false until a safe command source is wired and independently validated.
-
-### P4C - Data service adapters
-
-Contract layer implemented by `source/templeware/compat/velocity_data_compat.h`.
-
-It provides non-operational compatibility shapes for:
-
-- entity references
-- bone poses and skeleton snapshots
-- hitbox entries and hitbox sets
-- rich trace results
-
-The compile-time adapter flags are separate from runtime producer flags. This means `entities/bones/hitboxes/rich_trace` may report adapter=1 while the corresponding runtime state remains 0. No live entity, bone, hitbox, or trace acquisition was added by this checkpoint.
-
-### P4D - Config adapter
-
-Contract implemented by `source/templeware/compat/velocity_config_compat.h`.
-
-It provides:
-
-- an isolated `rage_config_snapshot`
-- version/revision metadata for future translation diagnostics
-- a TempleWare-owned publish/get/reset store
-- separate compile-time `rage_config_adapter` and runtime `rage_config_runtime` readiness
-- no direct dependency on GUI globals and no gameplay behaviour
-
-The config contract may therefore report adapter=1 while runtime config remains 0 until a validated TempleWare->Velocity translation publishes a snapshot.
+Isolate only changes that open or modify a live runtime producer. That keeps crashes attributable without forcing a build for every small architecture edit.
 
 ## Port Gate
 
-The compatibility gate stays BLOCKED until all of these are true:
+The final port gate remains closed until all required runtime surfaces are proven:
 
-1. local pawn/controller pair is available
-2. TempleWare SDK dereference safety is proven
-3. input runtime is available
-4. prediction runtime is available
-5. trace runtime is available
-6. command lifecycle contract exists
-7. command runtime source is proven
-8. entity cache contract exists and its runtime producer is proven
-9. bone contract exists and its runtime producer is proven
-10. hitbox contract exists and its runtime producer is proven
-11. rich trace contract exists and its runtime producer is proven
-12. Rage config contract exists
-13. Rage config runtime translation/publication is proven
+1. local pawn/controller pair available
+2. SDK dereference safety proven
+3. input/prediction runtime contract proven for the port
+4. trace runtime ready
+5. command runtime source proven
+6. entity-cache runtime producer proven
+7. bone runtime producer proven
+8. hitbox runtime producer proven
+9. rich-trace runtime producer proven
+10. config ownership published
 
-Only after that should the Velocity Rage source be mechanically adapted against the compatibility interfaces.
+The gate opening means only that compatibility prerequisites are proven. It does not itself execute Rage behaviour.
 
-## Rule For Future Port Work
+## Rule For Future Work
 
-Do not solve a missing Velocity dependency by scattering direct game access throughout Rage code. Add or fix the corresponding TempleWare compatibility adapter first, validate it independently, then let the port consume that adapter.
+Do not solve a missing Velocity dependency by scattering direct game access throughout ported combat code. Add or validate the corresponding TempleWare compatibility producer first, publish it through the central runtime boundary, then let future adapted code consume only the compatibility context/contracts.
