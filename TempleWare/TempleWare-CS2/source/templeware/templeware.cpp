@@ -22,14 +22,22 @@ void TempleWare::initFoundation() {
     schema.init("client.dll", 0);
 
     FileLogInit("[init] Initializing Interfaces...");
-    interfaces.init();
+    const bool interfacesReady = interfaces.init();
+    if (!interfacesReady) {
+        Validation::LogInterfacesFailed();
+        FileLogInit("[init] Foundation init stopped: interfaces failed");
+        return;
+    }
     Validation::LogInterfacesReady();
 
     Validation::LogHookInitBegin();
-    FileLogInit("[init] Initializing hooks...");
-    hooks.init();
+    FileLogInit("[init] Initializing Phase3A lifecycle validation hook...");
+    if (!hooks.initValidation()) {
+        FileLogInit("[init] Foundation init stopped: FrameStageNotify hook failed");
+        return;
+    }
 
-    FileLogInit("[init] Foundation init complete");
+    FileLogInit("[init] Foundation validation init complete");
 }
 
 void TempleWare::initRenderer(HWND& window, ID3D11Device* pDevice, ID3D11DeviceContext* pContext, ID3D11RenderTargetView* mainRenderTargetView) {
@@ -43,6 +51,9 @@ void TempleWare::initRenderer(HWND& window, ID3D11Device* pDevice, ID3D11DeviceC
 }
 
 void TempleWare::init(HWND& window, ID3D11Device* pDevice, ID3D11DeviceContext* pContext, ID3D11RenderTargetView* mainRenderTargetView) {
+    // Legacy/full path retained for compatibility. The active Phase3A runtime
+    // calls initFoundation() directly and therefore does not initialize the
+    // duplicate renderer/menu stack.
     initFoundation();
     initRenderer(window, pDevice, pContext, mainRenderTargetView);
 
