@@ -17,10 +17,17 @@ namespace Validation {
 static std::atomic<bool> s_phase3aBuildActiveLogged{false};
 static std::atomic<bool> s_foundationInitBeginLogged{false};
 static std::atomic<bool> s_interfacesReadyLogged{false};
+static std::atomic<bool> s_interfacesFailedLogged{false};
 static std::atomic<bool> s_hookInitBeginLogged{false};
 static std::atomic<bool> s_framestageHookInstalledLogged{false};
+static std::atomic<bool> s_framestageHookFailedLogged{false};
 static std::atomic<bool> s_framestageFirstCallLogged{false};
 static std::atomic<bool> s_cacheUpdateFirstCallLogged{false};
+
+static void DualLog(const char* text, LogType type = LogType::Info) {
+    FileLog::Log(text);
+    Logger::Log(text, type);
+}
 
 void Initialize() {
     g_counters.local_player_cache_updates.store(0);
@@ -35,12 +42,11 @@ void Initialize() {
     g_counters.vtable_failures.store(0);
     g_counters.pattern_resolutions.store(0);
     g_counters.pattern_failures.store(0);
-    
+
     if (!s_phase3aBuildActiveLogged.exchange(true)) {
         FileLog::Log("[Validation] PHASE3A BUILD ACTIVE");
     }
-    FileLog::Log("[Validation] Diagnostic harness initialized");
-    Logger::Log("[Validation] Diagnostic harness initialized", LogType::Info);
+    DualLog("[Validation] Diagnostic harness initialized", LogType::Info);
 }
 
 void LogFoundationInitBegin() {
@@ -55,6 +61,12 @@ void LogInterfacesReady() {
     }
 }
 
+void LogInterfacesFailed() {
+    if (!s_interfacesFailedLogged.exchange(true)) {
+        FileLog::Log("[Validation] INTERFACES FAILED");
+    }
+}
+
 void LogHookInitBegin() {
     if (!s_hookInitBeginLogged.exchange(true)) {
         FileLog::Log("[Validation] HOOK INIT BEGIN");
@@ -64,6 +76,12 @@ void LogHookInitBegin() {
 void LogFramestageHookInstalled() {
     if (!s_framestageHookInstalledLogged.exchange(true)) {
         FileLog::Log("[Validation] FRAMESTAGE HOOK INSTALLED");
+    }
+}
+
+void LogFramestageHookFailed() {
+    if (!s_framestageHookFailedLogged.exchange(true)) {
+        FileLog::Log("[Validation] FRAMESTAGE HOOK FAILED");
     }
 }
 
@@ -80,15 +98,10 @@ void OnLocalPlayerCacheUpdate(const LocalPlayerSnapshot& snapshot) {
         FileLog::Log("[Validation] CACHE UPDATE FIRST CALL");
     }
 
-    uint64_t current_tick = 0;
-    if (I::GlobalVars) {
-        current_tick = I::GlobalVars->m_tick_count;
-    }
-
-    if (g_rate_limiter.should_log(current_tick)) {
+    if (g_cache_rate_limiter.should_log()) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] LocalPlayerCache update #%u: pawn=0x%p controller=0x%p observer_pawn=0x%p observer_ctrl=0x%p team=%d alive=%d valid=%d",
+            "[Validation] LocalPlayerCache update #%u: pawn=%p controller=%p observer_pawn=%p observer_ctrl=%p team=%d alive=%d valid=%d",
             g_counters.local_player_cache_updates.load(),
             reinterpret_cast<void*>(snapshot.pawn),
             reinterpret_cast<void*>(snapshot.controller),
@@ -98,15 +111,13 @@ void OnLocalPlayerCacheUpdate(const LocalPlayerSnapshot& snapshot) {
             snapshot.is_alive,
             snapshot.is_valid()
         );
-        Logger::Log(buf, LogType::Info);
-        FileLog::Log(buf);
+        DualLog(buf, LogType::Info);
     }
 }
 
 void OnLocalPlayerCacheReset() {
     g_counters.local_player_cache_resets.fetch_add(1, std::memory_order_relaxed);
-    Logger::Log("[Validation] LocalPlayerCache reset", LogType::Warning);
-    FileLog::Log("[Validation] LocalPlayerCache reset");
+    DualLog("[Validation] LocalPlayerCache reset", LogType::Warning);
 }
 
 void OnEntityHandleLookup(const CBaseHandle& handle, void* resolved_entity, const CBaseHandle& entity_handle) {
@@ -119,32 +130,27 @@ void OnEntityHandleLookup(const CBaseHandle& handle, void* resolved_entity, cons
             g_counters.handle_mismatches.fetch_add(1, std::memory_order_relaxed);
         }
     } else if (handle.valid() && !resolved_entity) {
+        mismatch = true;
         g_counters.handle_mismatches.fetch_add(1, std::memory_order_relaxed);
     }
 
-    uint64_t current_tick = 0;
-    if (I::GlobalVars) {
-        current_tick = I::GlobalVars->m_tick_count;
-    }
-
-    if (mismatch && g_rate_limiter.should_log(current_tick)) {
+    if (g_handle_rate_limiter.should_log()) {
         char buf[512];
-        std::snprintf(buf, sizeof(buf),
-            "[Validation] HANDLE MISMATCH: handle_idx=%d handle_serial=%d entity_idx=%d entity_serial=%d resolved=%p",
-            handle.index(), handle.serial_number(),
-            entity_handle.index(), entity_handle.serial_number(),
-            resolved_entity
-        );
-        Logger::Log(buf, LogType::Warning);
-        FileLog::Log(buf);
-    } else if (!mismatch && g_rate_limiter.should_log(current_tick)) {
-        char buf[512];
-        std::snprintf(buf, sizeof(buf),
-            "[Validation] Handle OK: idx=%d serial=%d resolved=%p",
-            handle.index(), handle.serial_number(), resolved_entity
-        );
-        Logger::Log(buf, LogType::Info);
-        FileLog::Log(buf);
+        if (mismatch) {
+            std::snprintf(buf, sizeof(buf),
+                "[Validation] HANDLE MISMATCH: handle_idx=%d handle_serial=%d entity_idx=%d entity_serial=%d resolved=%p",
+                handle.index(), handle.serial_number(),
+                entity_handle.index(), entity_handle.serial_number(),
+                resolved_entity
+            );
+            DualLog(buf, LogType::Warning);
+        } else {
+            std::snprintf(buf, sizeof(buf),
+                "[Validation] Handle OK: idx=%d serial=%d resolved=%p",
+                handle.index(), handle.serial_number(), resolved_entity
+            );
+            DualLog(buf, LogType::Info);
+        }
     }
 }
 
@@ -156,6 +162,9 @@ void OnEntityIdentityCheck(CEntityInstance* entity) {
     CEntityIdentity* identity = entity->m_pEntityIdentity();
     if (!identity) {
         g_counters.entity_identity_mismatches.fetch_add(1, std::memory_order_relaxed);
+        if (g_identity_rate_limiter.should_log()) {
+            DualLog("[Validation] EntityIdentity: NULL identity", LogType::Warning);
+        }
         return;
     }
 
@@ -171,19 +180,13 @@ void OnEntityIdentityCheck(CEntityInstance* entity) {
         g_counters.entity_identity_mismatches.fetch_add(1, std::memory_order_relaxed);
     }
 
-    uint64_t current_tick = 0;
-    if (I::GlobalVars) {
-        current_tick = I::GlobalVars->m_tick_count;
-    }
-
-    if (g_rate_limiter.should_log(current_tick)) {
+    if (g_identity_rate_limiter.should_log()) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
             "[Validation] EntityIdentity: idx=%d serial=%d valid=%d schema='%s' handle_match=%d",
             idx, serial, valid, schema_name.c_str(), handle_matches
         );
-        Logger::Log(buf, valid && handle_matches ? LogType::Info : LogType::Warning);
-        FileLog::Log(buf);
+        DualLog(buf, valid && handle_matches ? LogType::Info : LogType::Warning);
     }
 }
 
@@ -195,40 +198,37 @@ void OnSceneNodeChainCheck(C_CSPlayerPawn* pawn) {
     CGameSceneNode* scene = pawn->m_pGameSceneNode();
     if (!scene) {
         g_counters.scene_node_chain_failures.fetch_add(1, std::memory_order_relaxed);
-        Logger::Log("[Validation] SceneNode: NULL", LogType::Warning);
-        FileLog::Log("[Validation] SceneNode: NULL");
+        if (g_scene_rate_limiter.should_log()) {
+            DualLog("[Validation] SceneNode: NULL", LogType::Warning);
+        }
         return;
     }
 
     CSkeletonInstance* skeleton = scene->GetSkeletonInstance();
     if (!skeleton) {
         g_counters.scene_node_chain_failures.fetch_add(1, std::memory_order_relaxed);
-        Logger::Log("[Validation] SkeletonInstance: NULL", LogType::Warning);
-        FileLog::Log("[Validation] SkeletonInstance: NULL");
+        if (g_scene_rate_limiter.should_log()) {
+            DualLog("[Validation] SkeletonInstance: NULL", LogType::Warning);
+        }
         return;
     }
 
     Matrix2x4_t* bone_cache = skeleton->m_bone_cache;
     if (!bone_cache) {
         g_counters.scene_node_chain_failures.fetch_add(1, std::memory_order_relaxed);
-        Logger::Log("[Validation] BoneCache: NULL", LogType::Warning);
-        FileLog::Log("[Validation] BoneCache: NULL");
+        if (g_scene_rate_limiter.should_log()) {
+            DualLog("[Validation] BoneCache: NULL", LogType::Warning);
+        }
         return;
     }
 
-    uint64_t current_tick = 0;
-    if (I::GlobalVars) {
-        current_tick = I::GlobalVars->m_tick_count;
-    }
-
-    if (g_rate_limiter.should_log(current_tick)) {
+    if (g_scene_rate_limiter.should_log()) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] SceneNodeChain: scene=0x%p skeleton=0x%p bone_cache=0x%p bone_count=%d",
+            "[Validation] SceneNodeChain: scene=%p skeleton=%p bone_cache=%p bone_count=%d",
             scene, skeleton, bone_cache, skeleton->m_bone_count
         );
-        Logger::Log(buf, LogType::Info);
-        FileLog::Log(buf);
+        DualLog(buf, LogType::Info);
     }
 }
 
@@ -238,19 +238,13 @@ void OnVTableCall(const char* name, uint32_t index, void* this_ptr, bool success
         g_counters.vtable_failures.fetch_add(1, std::memory_order_relaxed);
     }
 
-    uint64_t current_tick = 0;
-    if (I::GlobalVars) {
-        current_tick = I::GlobalVars->m_tick_count;
-    }
-
-    if (g_rate_limiter.should_log(current_tick)) {
+    if (g_vtable_rate_limiter.should_log()) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] VTableCall: %s[%u] this=0x%p %s",
+            "[Validation] VTableCall: %s[%u] this=%p %s",
             name, index, this_ptr, success ? "OK" : "FAILED"
         );
-        Logger::Log(buf, success ? LogType::Info : LogType::Error);
-        FileLog::Log(buf);
+        DualLog(buf, success ? LogType::Info : LogType::Error);
     }
 }
 
@@ -260,24 +254,19 @@ void OnPatternResolution(const char* name, void* resolved_addr, bool success) {
         g_counters.pattern_failures.fetch_add(1, std::memory_order_relaxed);
     }
 
-    uint64_t current_tick = 0;
-    if (I::GlobalVars) {
-        current_tick = I::GlobalVars->m_tick_count;
-    }
-
-    if (g_rate_limiter.should_log(current_tick)) {
+    if (g_pattern_rate_limiter.should_log()) {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] Pattern: %s -> 0x%p %s",
+            "[Validation] Pattern: %s -> %p %s",
             name, resolved_addr, success ? "OK" : "FAILED"
         );
-        Logger::Log(buf, success ? LogType::Info : LogType::Error);
-        FileLog::Log(buf);
+        DualLog(buf, success ? LogType::Info : LogType::Error);
     }
 }
 
 void LogPeriodicSummary(uint64_t current_tick) {
-    if (!g_rate_limiter.should_log(current_tick)) return;
+    (void)current_tick;
+    if (!g_summary_rate_limiter.should_log()) return;
 
     char buf[1024];
     std::snprintf(buf, sizeof(buf),
@@ -297,8 +286,7 @@ void LogPeriodicSummary(uint64_t current_tick) {
         g_counters.pattern_resolutions.load(),
         g_counters.pattern_failures.load()
     );
-    Logger::Log(buf, LogType::Info);
-    FileLog::Log(buf);
+    DualLog(buf, LogType::Info);
 }
 
 } // namespace Validation
