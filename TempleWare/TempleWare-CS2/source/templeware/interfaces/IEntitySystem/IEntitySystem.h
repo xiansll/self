@@ -18,16 +18,27 @@ private:
 		"48 83 EC ? 83 F9 ? 75 ? 48 8B 0D ? ? ? ? 48 8D 54 24 ? 48 8B 01 FF 90 ? ? ? ? 8B 08 48 63 C1 48 8D 0D ? ? ? ? 48 8B 04 C1 48 83 C4 ? C3 CC CC CC CC CC CC CC CC CC CC CC CC CC 48 83 EC ? 83 F9";
 
 	static LocalPawnFn local_pawn_resolver() {
-		static auto fn = reinterpret_cast<LocalPawnFn>(
-			M::scan_absolute("client.dll", kLocalPawnPattern, 0x1)
-		); // existing resolver; diagnostic refactor only
+		// Do not permanently cache an early null. The previous one-shot static
+		// initializer could run before the scanner/module path was ready and then
+		// keep nullptr for the lifetime of the process even though the exact same
+		// pattern resolved successfully later. Retry only while unresolved; once a
+		// valid address is found it remains cached as before.
+		static LocalPawnFn fn = nullptr;
+		if (!fn) {
+			fn = reinterpret_cast<LocalPawnFn>(
+				M::scan_absolute("client.dll", kLocalPawnPattern, 0x1)
+			);
+		}
 		return fn;
 	}
 
 	static LocalControllerFn local_controller_resolver() {
-		static auto fn = reinterpret_cast<LocalControllerFn>(
-			M::patternScan("client", kLocalControllerPattern)
-		);
+		static LocalControllerFn fn = nullptr;
+		if (!fn) {
+			fn = reinterpret_cast<LocalControllerFn>(
+				M::patternScan("client", kLocalControllerPattern)
+			);
+		}
 		return fn;
 	}
 
