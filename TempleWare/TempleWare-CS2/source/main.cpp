@@ -19,6 +19,8 @@
 #include "templeware/globals/globals.h"
 #include "templeware/templeware.h"
 #include "templeware/utils/filelog/filelog.h"
+#include "templeware/utils/localplayer/localplayer.h"
+#include "templeware/utils/validation/validation.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -100,8 +102,42 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
     if (!foundationInit)
     {
-        g_templeWare.initFoundation();
-        foundationInit = true;
+        foundationInit = g_templeWare.initFoundation();
+    }
+
+    // Phase3A regression-isolation path. Present is already proven to execute,
+    // so use it to validate the local-player/entity plumbing without installing
+    // the suspect FrameStageNotify detour.
+    if (foundationInit)
+    {
+        static bool s_presentDiagnosticLogged = false;
+        if (!s_presentDiagnosticLogged)
+        {
+            FileLog::Log("[Validation] PRESENT DIAGNOSTIC FIRST CALL");
+            s_presentDiagnosticLogged = true;
+        }
+
+        if (I::EngineClient && I::GameEntity && I::GameEntity->Instance &&
+            I::EngineClient->connected() && I::EngineClient->in_game())
+        {
+            g_local_player_cache->update();
+            const LocalPlayerSnapshot snapshot = g_local_player_cache->get();
+            Validation::OnLocalPlayerCacheUpdate(snapshot);
+
+            if (snapshot.pawn)
+            {
+                auto* pawn = reinterpret_cast<C_CSPlayerPawn*>(snapshot.pawn);
+                Validation::OnSceneNodeChainCheck(pawn);
+                Validation::OnEntityIdentityCheck(reinterpret_cast<CEntityInstance*>(pawn));
+            }
+
+            if (snapshot.controller)
+            {
+                Validation::OnEntityIdentityCheck(reinterpret_cast<CEntityInstance*>(snapshot.controller));
+            }
+
+            Validation::LogPeriodicSummary(0);
+        }
     }
 
     ImGui_ImplDX11_NewFrame();
