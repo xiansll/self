@@ -25,6 +25,46 @@ inline void LogSimple(const char* stage, const char* status, const char* detail 
     FileLog::Log(buf);
 }
 
+// Keep SEH in tiny leaf helpers that contain no C++ objects requiring unwind.
+// MSVC rejects __try inside Run() because that function constructs a temporary
+// std::string for modules.getModule("client"). These helpers preserve the same
+// diagnostic behavior without changing resolver patterns, arguments, or calls.
+inline C_CSPlayerPawn* SehGetLocalPawn(I_EntitySystem* entitySystem, DWORD* exceptionCode) {
+    C_CSPlayerPawn* result = nullptr;
+    if (exceptionCode)
+        *exceptionCode = 0;
+
+    __try {
+        result = entitySystem ? entitySystem->get_local_pawn() : nullptr;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (exceptionCode)
+            *exceptionCode = GetExceptionCode();
+        result = nullptr;
+    }
+
+    return result;
+}
+
+inline CCSPlayerController* SehGetLocalController(I_EntitySystem* entitySystem, DWORD* exceptionCode) {
+    CCSPlayerController* result = nullptr;
+    if (exceptionCode)
+        *exceptionCode = 0;
+
+    __try {
+        result = entitySystem
+            ? reinterpret_cast<CCSPlayerController*>(entitySystem->get_local_controller())
+            : nullptr;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (exceptionCode)
+            *exceptionCode = GetExceptionCode();
+        result = nullptr;
+    }
+
+    return result;
+}
+
 inline void Run(const LocalPlayerSnapshot& snapshot) {
     // Re-run only when the selected local pair changes. This keeps the heavier
     // strict scanner diagnostics out of the per-frame path.
@@ -136,61 +176,59 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
 
     if (pawnResolver) {
         LogSimple("S3.1 EntitySystem::get_local_pawn", "ENTER");
-        __try {
-            sdkPawn = I::EntitySystem->get_local_pawn();
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            pawnCallException = true;
+        DWORD exceptionCode = 0;
+        sdkPawn = SehGetLocalPawn(I::EntitySystem, &exceptionCode);
+        pawnCallException = exceptionCode != 0;
+
+        if (pawnCallException) {
             char buf[128];
-            std::snprintf(buf, sizeof(buf), "exception=0x%08lX", GetExceptionCode());
+            std::snprintf(buf, sizeof(buf), "exception=0x%08lX", exceptionCode);
             LogSimple("S3.1 EntitySystem::get_local_pawn", "FAIL", buf);
         }
-
-        if (!pawnCallException) {
-            if (sdkPawn) {
-                char buf[224];
-                const bool match = reinterpret_cast<std::uintptr_t>(sdkPawn) == snapshot.pawn;
-                std::snprintf(buf, sizeof(buf),
-                    "result=%p reference=%p match=%d",
-                    static_cast<void*>(sdkPawn),
-                    reinterpret_cast<void*>(snapshot.pawn),
-                    match ? 1 : 0);
-                LogSimple("S3.1 EntitySystem::get_local_pawn", match ? "PASS" : "FAIL", buf);
-            } else {
-                LogSimple("S3.1 EntitySystem::get_local_pawn", "FAIL", "result=null");
-            }
+        else if (sdkPawn) {
+            char buf[224];
+            const bool match = reinterpret_cast<std::uintptr_t>(sdkPawn) == snapshot.pawn;
+            std::snprintf(buf, sizeof(buf),
+                "result=%p reference=%p match=%d",
+                static_cast<void*>(sdkPawn),
+                reinterpret_cast<void*>(snapshot.pawn),
+                match ? 1 : 0);
+            LogSimple("S3.1 EntitySystem::get_local_pawn", match ? "PASS" : "FAIL", buf);
         }
-    } else {
+        else {
+            LogSimple("S3.1 EntitySystem::get_local_pawn", "FAIL", "result=null");
+        }
+    }
+    else {
         LogSimple("S3.1 EntitySystem::get_local_pawn", "SKIP", "cached resolver address missing");
     }
 
     if (controllerResolver) {
         LogSimple("S3.2 EntitySystem::get_local_controller", "ENTER");
-        __try {
-            sdkController = reinterpret_cast<CCSPlayerController*>(I::EntitySystem->get_local_controller());
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER) {
-            controllerCallException = true;
+        DWORD exceptionCode = 0;
+        sdkController = SehGetLocalController(I::EntitySystem, &exceptionCode);
+        controllerCallException = exceptionCode != 0;
+
+        if (controllerCallException) {
             char buf[128];
-            std::snprintf(buf, sizeof(buf), "exception=0x%08lX", GetExceptionCode());
+            std::snprintf(buf, sizeof(buf), "exception=0x%08lX", exceptionCode);
             LogSimple("S3.2 EntitySystem::get_local_controller", "FAIL", buf);
         }
-
-        if (!controllerCallException) {
-            if (sdkController) {
-                char buf[224];
-                const bool match = reinterpret_cast<std::uintptr_t>(sdkController) == snapshot.controller;
-                std::snprintf(buf, sizeof(buf),
-                    "result=%p reference=%p match=%d",
-                    static_cast<void*>(sdkController),
-                    reinterpret_cast<void*>(snapshot.controller),
-                    match ? 1 : 0);
-                LogSimple("S3.2 EntitySystem::get_local_controller", match ? "PASS" : "FAIL", buf);
-            } else {
-                LogSimple("S3.2 EntitySystem::get_local_controller", "FAIL", "result=null");
-            }
+        else if (sdkController) {
+            char buf[224];
+            const bool match = reinterpret_cast<std::uintptr_t>(sdkController) == snapshot.controller;
+            std::snprintf(buf, sizeof(buf),
+                "result=%p reference=%p match=%d",
+                static_cast<void*>(sdkController),
+                reinterpret_cast<void*>(snapshot.controller),
+                match ? 1 : 0);
+            LogSimple("S3.2 EntitySystem::get_local_controller", match ? "PASS" : "FAIL", buf);
         }
-    } else {
+        else {
+            LogSimple("S3.2 EntitySystem::get_local_controller", "FAIL", "result=null");
+        }
+    }
+    else {
         LogSimple("S3.2 EntitySystem::get_local_controller", "SKIP", "cached resolver address missing");
     }
 
@@ -211,7 +249,8 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
 
     if (gateReady) {
         LogSimple("GATE", "PASS", "resolver provenance and local pointer parity are proven; deep wrapper validation remains separately disabled");
-    } else {
+    }
+    else {
         LogSimple("GATE", "BLOCKED", "resolver provenance is not fully proven; wrapper/identity/scene probes remain disabled");
     }
 }
