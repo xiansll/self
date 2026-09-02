@@ -35,29 +35,43 @@ struct ValidationCounters {
 
 inline ValidationCounters g_counters;
 
+// Wall-clock based limiter so diagnostics still work before/without GlobalVars.
+// Each validation category owns its own limiter; one category cannot suppress
+// all other output in the same frame/tick.
 struct RateLimiter {
-    std::atomic<uint64_t> last_log_tick{0};
-    uint32_t min_tick_interval;
+    std::atomic<int64_t> last_log_ms{0};
+    uint32_t min_interval_ms;
 
-    RateLimiter(uint32_t interval = 64) : min_tick_interval(interval) {}
+    explicit RateLimiter(uint32_t interval_ms = 1000) : min_interval_ms(interval_ms) {}
 
-    bool should_log(uint64_t current_tick) {
-        uint64_t last = last_log_tick.load(std::memory_order_relaxed);
-        if (current_tick - last >= min_tick_interval) {
-            return last_log_tick.compare_exchange_strong(last, current_tick, std::memory_order_relaxed);
-        }
-        return false;
+    bool should_log() {
+        using namespace std::chrono;
+        const int64_t now = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+        int64_t last = last_log_ms.load(std::memory_order_relaxed);
+
+        if (last != 0 && (now - last) < static_cast<int64_t>(min_interval_ms))
+            return false;
+
+        return last_log_ms.compare_exchange_strong(last, now, std::memory_order_relaxed);
     }
 };
 
-inline RateLimiter g_rate_limiter(64);
+inline RateLimiter g_cache_rate_limiter(1000);
+inline RateLimiter g_handle_rate_limiter(1000);
+inline RateLimiter g_identity_rate_limiter(1000);
+inline RateLimiter g_scene_rate_limiter(1000);
+inline RateLimiter g_vtable_rate_limiter(1000);
+inline RateLimiter g_pattern_rate_limiter(1000);
+inline RateLimiter g_summary_rate_limiter(1000);
 
 void Initialize();
 
 void LogFoundationInitBegin();
 void LogInterfacesReady();
+void LogInterfacesFailed();
 void LogHookInitBegin();
 void LogFramestageHookInstalled();
+void LogFramestageHookFailed();
 void LogFramestageFirstCall();
 
 void OnLocalPlayerCacheUpdate(const LocalPlayerSnapshot& snapshot);
@@ -70,6 +84,8 @@ void OnSceneNodeChainCheck(C_CSPlayerPawn* pawn);
 void OnVTableCall(const char* name, uint32_t index, void* this_ptr, bool success);
 void OnPatternResolution(const char* name, void* resolved_addr, bool success);
 
+// current_tick is retained for call-site compatibility; rate limiting no longer
+// depends on engine tick availability.
 void LogPeriodicSummary(uint64_t current_tick);
 
 } // namespace Validation
