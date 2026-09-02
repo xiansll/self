@@ -15,6 +15,7 @@
 #include "../features/prediction/prediction.h"
 #include "../utils/filelog/filelog.h"
 #include "../utils/localplayer/localplayer.h"
+#include "velocity_command_compat.h"
 #include "../../trace/trace.h"
 
 namespace VelocityRageCompat {
@@ -71,15 +72,16 @@ struct local_state {
     return out;
 }
 
-// This report separates "the type exists" from "the runtime path is proven".
-// A port must not infer layout safety from a non-null pawn/controller pointer.
+// This report separates "the contract exists" from "the runtime path is
+// proven". A port must not infer runtime safety from compile-time availability.
 struct readiness {
-    // Already available as TempleWare-facing types/services.
+    // Already available as TempleWare-facing types/services/contracts.
     bool vector_types = true;
     bool usercmd_type = true;
     bool local_snapshot_adapter = true;
     bool prediction_object = true;
     bool basic_trace_api = true;
+    bool command_pipeline_adapter = true;
 
     // Runtime state that can be observed without deep entity dereferences.
     bool local_pair = false;
@@ -87,10 +89,10 @@ struct readiness {
     bool input_runtime = false;
     bool prediction_runtime = false;
     bool trace_runtime = false;
+    bool command_runtime = false;
 
     // Velocity Rage dependencies that still require explicit adapters. These
     // remain false until implemented and separately validated.
-    bool command_pipeline_adapter = false;
     bool entity_cache_adapter = false;
     bool bone_adapter = false;
     bool hitbox_adapter = false;
@@ -105,6 +107,7 @@ struct readiness {
     r.input_runtime = I::Input != nullptr;
     r.prediction_runtime = static_cast<bool>(g_prediction);
     r.trace_runtime = Trace::Ready();
+    r.command_runtime = g_command_lifecycle.runtime_ready();
     return r;
 }
 
@@ -117,6 +120,7 @@ struct readiness {
            r.prediction_runtime &&
            r.trace_runtime &&
            r.command_pipeline_adapter &&
+           r.command_runtime &&
            r.entity_cache_adapter &&
            r.bone_adapter &&
            r.hitbox_adapter &&
@@ -143,21 +147,23 @@ inline void log_readiness(const LocalPlayerSnapshot& snapshot) {
 
     char buf[512];
     std::snprintf(buf, sizeof(buf),
-        "[P4COMPAT] TYPE MAP vector=%d usercmd=%d local=%d prediction=%d trace_api=%d",
+        "[P4COMPAT] TYPE MAP vector=%d usercmd=%d local=%d prediction=%d trace_api=%d command_contract=%d",
         r.vector_types ? 1 : 0,
         r.usercmd_type ? 1 : 0,
         r.local_snapshot_adapter ? 1 : 0,
         r.prediction_object ? 1 : 0,
-        r.basic_trace_api ? 1 : 0);
+        r.basic_trace_api ? 1 : 0,
+        r.command_pipeline_adapter ? 1 : 0);
     FileLog::Log(buf);
 
     std::snprintf(buf, sizeof(buf),
-        "[P4COMPAT] RUNTIME local_pair=%d sdk_safe=%d input=%d prediction=%d trace=%d",
+        "[P4COMPAT] RUNTIME local_pair=%d sdk_safe=%d input=%d prediction=%d trace=%d command=%d",
         r.local_pair ? 1 : 0,
         r.sdk_deref_safe ? 1 : 0,
         r.input_runtime ? 1 : 0,
         r.prediction_runtime ? 1 : 0,
-        r.trace_runtime ? 1 : 0);
+        r.trace_runtime ? 1 : 0,
+        r.command_runtime ? 1 : 0);
     FileLog::Log(buf);
 
     std::snprintf(buf, sizeof(buf),
