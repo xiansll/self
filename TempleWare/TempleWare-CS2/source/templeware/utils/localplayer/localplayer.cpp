@@ -169,9 +169,10 @@ void LocalPlayerCache::update() {
         entitySystemPawn == clientGlobalPawn &&
         entitySystemController == clientGlobalController;
 
-    // P3D can publish only the basic wrapper semantic gate after repeated,
-    // exception-free read-only probes. Deeper identity/scene/skeleton traversal
-    // remains closed and must be proven independently later.
+    // P3D can publish only the schema-backed basic wrapper semantic gate after
+    // repeated, exception-free read-only probes. Deeper identity/scene/skeleton
+    // traversal and controller fields not present in the static schema table stay
+    // closed until independently proven.
     const bool wrapperSemanticsProven =
         resolverPairProven && LocalPlayerTrust::basic_wrapper_semantics_proven();
     const bool sdkDerefSafe = wrapperSemanticsProven;
@@ -199,8 +200,7 @@ void LocalPlayerCache::update() {
     m_snapshot.sdk_deref_safe = sdkDerefSafe;
     m_snapshot.sdk_deep_graph_safe = deepGraphSafe;
 
-    // Basic wrapper reads only. The P3D semantic probe validates exactly this
-    // small set before the gate can become true.
+    // P3D validates exactly these basic pawn reads before this gate can open.
     if (local_pawn && sdkDerefSafe) {
         m_snapshot.team = local_pawn->m_iTeamNum();
         m_snapshot.is_alive = local_pawn->is_alive();
@@ -211,36 +211,33 @@ void LocalPlayerCache::update() {
         m_snapshot.is_team_mode = false;
     }
 
-    if (local_controller && sdkDerefSafe) {
-        m_snapshot.view_team = local_controller->m_iDesiredTeam();
+    // view_team currently has no backing entry in TempleWare's static schema
+    // table, so do not call m_iDesiredTeam() merely because the basic wrapper
+    // gate is open. Observer handles likewise belong to the unproven deep graph.
+    m_snapshot.view_team = 0;
 
-        // Observer handle resolution crosses into the deeper entity graph. Keep
-        // it closed even after the basic wrapper fields are proven.
-        if (deepGraphSafe) {
-            if (auto observer_pawn_handle = local_controller->m_hObserverPawn(); observer_pawn_handle.valid()) {
-                C_CSPlayerPawn* observer_pawn = nullptr;
-                if (I::GameEntity && I::GameEntity->Instance)
-                    observer_pawn = I::GameEntity->Instance->Get<C_CSPlayerPawn>(observer_pawn_handle);
-                if (!observer_pawn && I::EntitySystem)
-                    observer_pawn = I::EntitySystem->get_base_entity<C_CSPlayerPawn>(observer_pawn_handle.index());
+    if (local_controller && deepGraphSafe) {
+        if (auto observer_pawn_handle = local_controller->m_hObserverPawn(); observer_pawn_handle.valid()) {
+            C_CSPlayerPawn* observer_pawn = nullptr;
+            if (I::GameEntity && I::GameEntity->Instance)
+                observer_pawn = I::GameEntity->Instance->Get<C_CSPlayerPawn>(observer_pawn_handle);
+            if (!observer_pawn && I::EntitySystem)
+                observer_pawn = I::EntitySystem->get_base_entity<C_CSPlayerPawn>(observer_pawn_handle.index());
 
-                if (observer_pawn) {
-                    m_snapshot.observer_pawn = reinterpret_cast<std::uintptr_t>(observer_pawn);
-                    if (auto observer_controller_handle = observer_pawn->m_hController(); observer_controller_handle.valid()) {
-                        CCSPlayerController* observer_controller = nullptr;
-                        if (I::GameEntity && I::GameEntity->Instance)
-                            observer_controller = I::GameEntity->Instance->Get<CCSPlayerController>(observer_controller_handle);
-                        if (!observer_controller && I::EntitySystem)
-                            observer_controller = I::EntitySystem->get_base_entity<CCSPlayerController>(observer_controller_handle.index());
+            if (observer_pawn) {
+                m_snapshot.observer_pawn = reinterpret_cast<std::uintptr_t>(observer_pawn);
+                if (auto observer_controller_handle = observer_pawn->m_hController(); observer_controller_handle.valid()) {
+                    CCSPlayerController* observer_controller = nullptr;
+                    if (I::GameEntity && I::GameEntity->Instance)
+                        observer_controller = I::GameEntity->Instance->Get<CCSPlayerController>(observer_controller_handle);
+                    if (!observer_controller && I::EntitySystem)
+                        observer_controller = I::EntitySystem->get_base_entity<CCSPlayerController>(observer_controller_handle.index());
 
-                        if (observer_controller)
-                            m_snapshot.observer_controller = reinterpret_cast<std::uintptr_t>(observer_controller);
-                    }
+                    if (observer_controller)
+                        m_snapshot.observer_controller = reinterpret_cast<std::uintptr_t>(observer_controller);
                 }
             }
         }
-    } else {
-        m_snapshot.view_team = 0;
     }
 
     m_is_deathmatch.store(false);
