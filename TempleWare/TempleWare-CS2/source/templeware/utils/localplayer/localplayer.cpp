@@ -22,6 +22,11 @@ namespace {
     constexpr std::uintptr_t kLocalPlayerPawnOffset = 0x23C6268;
     constexpr std::uintptr_t kLocalPlayerControllerOffset = 0x23A0F30;
 
+    // Resolver provenance and wrapper semantics are separate gates. The current
+    // checkpoint repairs the resolver cache and proves pointer parity only.
+    // Keep wrapper dereferences disabled until their own semantic validation pass.
+    constexpr bool kWrapperSemanticsValidated = false;
+
     void ReadClientGlobalLocals(C_CSPlayerPawn*& pawn,
                                 CCSPlayerController*& controller,
                                 std::uintptr_t& clientBase) {
@@ -42,6 +47,7 @@ namespace {
     }
 
     void LogProviderState(LocalProvider provider,
+                          bool resolverPairProven,
                           bool sdkDerefSafe,
                           C_CSPlayerPawn* entitySystemPawn,
                           CCSPlayerController* entitySystemController,
@@ -53,20 +59,24 @@ namespace {
         using namespace std::chrono;
         static steady_clock::time_point lastLog{};
         static LocalProvider lastProvider = LocalProvider::None;
+        static bool lastResolverPairProven = false;
         static bool lastSdkDerefSafe = false;
 
         const auto now = steady_clock::now();
-        const bool providerChanged = provider != lastProvider || sdkDerefSafe != lastSdkDerefSafe;
+        const bool providerChanged = provider != lastProvider ||
+            resolverPairProven != lastResolverPairProven ||
+            sdkDerefSafe != lastSdkDerefSafe;
         const bool intervalElapsed = lastLog.time_since_epoch().count() == 0 ||
             duration_cast<milliseconds>(now - lastLog).count() >= 1000;
 
         if (!providerChanged && !intervalElapsed)
             return;
 
-        char buf[832];
+        char buf[896];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] LocalProvider: selected=%d sdk_safe=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p client=%p cg_pawn=%p cg_ctrl=%p",
+            "[Validation] LocalProvider: selected=%d resolver_proven=%d sdk_safe=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p client=%p cg_pawn=%p cg_ctrl=%p",
             static_cast<int>(provider),
+            resolverPairProven ? 1 : 0,
             sdkDerefSafe ? 1 : 0,
             static_cast<void*>(I::EntitySystem),
             static_cast<void*>(entitySystemPawn),
@@ -81,6 +91,7 @@ namespace {
         FileLog::Log(buf);
 
         lastProvider = provider;
+        lastResolverPairProven = resolverPairProven;
         lastSdkDerefSafe = sdkDerefSafe;
         lastLog = now;
     }
@@ -144,15 +155,19 @@ void LocalPlayerCache::update() {
     else if (usedClientGlobals)
         provider = LocalProvider::ClientGlobals;
 
-    // A client-global pointer can be a valid live game pointer while still not
-    // being safe to dereference through TempleWare's entity wrapper/layout.
-    // Only SDK-resolved pointers are allowed into deep wrapper calls here.
-    const bool pawnSdkSafe = !local_pawn || local_pawn == entitySystemPawn || local_pawn == gameResourcePawn;
-    const bool controllerSdkSafe = !local_controller ||
-        local_controller == entitySystemController || local_controller == gameResourceController;
-    const bool sdkDerefSafe = pawnSdkSafe && controllerSdkSafe;
+    // Resolver proof is based on independent address parity with the existing
+    // pointer-only reference source. It intentionally does not imply wrapper
+    // layout safety. The latter remains a separate explicit gate.
+    const bool resolverPairProven =
+        entitySystemPawn && entitySystemController &&
+        clientGlobalPawn && clientGlobalController &&
+        entitySystemPawn == clientGlobalPawn &&
+        entitySystemController == clientGlobalController;
+
+    const bool sdkDerefSafe = resolverPairProven && kWrapperSemanticsValidated;
 
     LogProviderState(provider,
+                     resolverPairProven,
                      sdkDerefSafe,
                      entitySystemPawn,
                      entitySystemController,
@@ -166,21 +181,22 @@ void LocalPlayerCache::update() {
     m_snapshot.pawn = reinterpret_cast<std::uintptr_t>(local_pawn);
     m_snapshot.observer_pawn = 0;
     m_snapshot.observer_controller = 0;
+    m_snapshot.sdk_resolver_pair_proven = resolverPairProven;
     m_snapshot.sdk_deref_safe = sdkDerefSafe;
 
-    if (local_pawn && pawnSdkSafe) {
+    if (local_pawn && sdkDerefSafe) {
         m_snapshot.team = local_pawn->m_iTeamNum();
         m_snapshot.is_alive = local_pawn->is_alive();
         m_snapshot.is_team_mode = true;
     } else {
-        // Pointer-only fallback: do not interpret the object with TempleWare's
-        // wrapper until layout compatibility is separately proven.
+        // Pointer-only/proven-resolver mode: do not interpret the object with
+        // TempleWare wrappers until wrapper/layout semantics are separately proven.
         m_snapshot.team = 0;
         m_snapshot.is_alive = false;
         m_snapshot.is_team_mode = false;
     }
 
-    if (local_controller && controllerSdkSafe) {
+    if (local_controller && sdkDerefSafe) {
         if (auto observer_pawn_handle = local_controller->m_hObserverPawn(); observer_pawn_handle.valid()) {
             C_CSPlayerPawn* observer_pawn = nullptr;
             if (I::GameEntity && I::GameEntity->Instance)
