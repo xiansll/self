@@ -13,7 +13,7 @@ static void FileLogInit(const char* msg)
     FileLog::Log(msg);
 }
 
-void TempleWare::initFoundation() {
+bool TempleWare::initFoundation() {
     Validation::LogFoundationInitBegin();
     FileLogInit("[init] Initializing modules...");
     modules.init();
@@ -26,18 +26,19 @@ void TempleWare::initFoundation() {
     if (!interfacesReady) {
         Validation::LogInterfacesFailed();
         FileLogInit("[init] Foundation init stopped: interfaces failed");
-        return;
+        return false;
     }
     Validation::LogInterfacesReady();
 
-    Validation::LogHookInitBegin();
-    FileLogInit("[init] Initializing Phase3A lifecycle validation hook...");
-    if (!hooks.initValidation()) {
-        FileLogInit("[init] Foundation init stopped: FrameStageNotify hook failed");
-        return;
-    }
-
-    FileLogInit("[init] Foundation validation init complete");
+    // Phase3A regression-isolation mode: initialize diagnostics only.
+    // FrameStageNotify is deliberately NOT installed here because the previous
+    // runtime test showed a camera regression while the hook never produced a
+    // FIRST CALL milestone. Present is already a proven live callback, so the
+    // active runtime performs the validation health checks from hkPresent.
+    Validation::Initialize();
+    FileLogInit("[Validation] FRAMESTAGE HOOK BYPASSED - PRESENT DIAGNOSTIC MODE");
+    FileLogInit("[init] Foundation diagnostic init complete");
+    return true;
 }
 
 void TempleWare::initRenderer(HWND& window, ID3D11Device* pDevice, ID3D11DeviceContext* pContext, ID3D11RenderTargetView* mainRenderTargetView) {
@@ -52,10 +53,15 @@ void TempleWare::initRenderer(HWND& window, ID3D11Device* pDevice, ID3D11DeviceC
 
 void TempleWare::init(HWND& window, ID3D11Device* pDevice, ID3D11DeviceContext* pContext, ID3D11RenderTargetView* mainRenderTargetView) {
     // Legacy/full path retained for compatibility. The active Phase3A runtime
-    // calls initFoundation() directly and therefore does not initialize the
-    // duplicate renderer/menu stack.
-    initFoundation();
-    initRenderer(window, pDevice, pContext, mainRenderTargetView);
+    // calls initFoundation() directly and therefore does not initialize either
+    // the legacy hook group or the duplicate renderer/menu stack.
+    if (!initFoundation())
+        return;
 
+    Validation::LogHookInitBegin();
+    FileLogInit("[init] Initializing full legacy hooks...");
+    hooks.init();
+
+    initRenderer(window, pDevice, pContext, mainRenderTargetView);
     FileLogInit("[init] Success...");
 }
