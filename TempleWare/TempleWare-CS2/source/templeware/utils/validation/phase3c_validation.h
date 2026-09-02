@@ -338,7 +338,9 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         ++stats.skips;
     }
 
-    const bool providerAlias = I::GameEntity && I::GameEntity->Instance == I::EntitySystem;
+    const bool providerAlias = I::GameEntity &&
+        reinterpret_cast<std::uintptr_t>(I::GameEntity->Instance) ==
+        reinterpret_cast<std::uintptr_t>(I::EntitySystem);
     LogSimple("S2.3 provider-alias", providerAlias ? "PASS" : "FAIL",
         providerAlias ? "GameEntity.Instance == I::EntitySystem" : "providers differ");
     if (!providerAlias)
