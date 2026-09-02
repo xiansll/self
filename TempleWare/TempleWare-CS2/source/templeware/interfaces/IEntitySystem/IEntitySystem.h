@@ -8,6 +8,7 @@ class I_EntitySystem {
 private:
 	using LocalPawnFn = C_CSPlayerPawn * (__fastcall*)(int);
 	using LocalControllerFn = void* (__fastcall*)(int);
+	using BaseEntityFn = C_BaseEntity * (__fastcall*)(I_EntitySystem*, int);
 
 	// Existing project patterns are centralized here so the operational resolver
 	// and the diagnostic-only scan path always inspect the exact same bytes.
@@ -16,6 +17,8 @@ private:
 		"E8 ? ? ? ? 48 8B F0 48 85 C0 74 ? 48 8D 15 ? ? ? ? B9";
 	inline static constexpr const char* kLocalControllerPattern =
 		"48 83 EC ? 83 F9 ? 75 ? 48 8B 0D ? ? ? ? 48 8D 54 24 ? 48 8B 01 FF 90 ? ? ? ? 8B 08 48 63 C1 48 8D 0D ? ? ? ? 48 8B 04 C1 48 83 C4 ? C3 CC CC CC CC CC CC CC CC CC CC CC CC CC 48 83 EC ? 83 F9";
+	inline static constexpr const char* kBaseEntityPattern =
+		"4C 8D 49 ? 81 FA";
 
 	static LocalPawnFn local_pawn_resolver() {
 		// Do not permanently cache an early null. The previous one-shot static
@@ -42,16 +45,26 @@ private:
 		return fn;
 	}
 
+	static BaseEntityFn base_entity_resolver() {
+		// Same init-order rule as the local resolvers: an early scanner miss must
+		// not become a permanent process-lifetime nullptr. This keeps the existing
+		// project pattern and call contract unchanged and only retries while null.
+		static BaseEntityFn fn = nullptr;
+		if (!fn) {
+			fn = reinterpret_cast<BaseEntityFn>(
+				M::patternScan("client", kBaseEntityPattern)
+			);
+		}
+		return fn;
+	}
+
 public:
 	template <class C = C_BaseEntity>
 	C* get_base_entity(int index) {
-		static auto get_client_entity = reinterpret_cast<C * (__fastcall*)(I_EntitySystem*, int)>(
-			M::patternScan("client", "4C 8D 49 ? 81 FA")
-			);
-
-		if (!get_client_entity)
+		auto fn = base_entity_resolver();
+		if (!fn)
 			return nullptr;
-		return get_client_entity(this, index);
+		return reinterpret_cast<C*>(fn(this, index));
 	}
 
 	C_CSPlayerPawn* get_local_pawn() {
@@ -87,6 +100,14 @@ public:
 
 	[[nodiscard]] void* diagnostic_local_controller_raw_match() const {
 		return reinterpret_cast<void*>(M::patternScan("client", kLocalControllerPattern));
+	}
+
+	[[nodiscard]] void* diagnostic_base_entity_resolver() const {
+		return reinterpret_cast<void*>(base_entity_resolver());
+	}
+
+	[[nodiscard]] void* diagnostic_base_entity_raw_match() const {
+		return reinterpret_cast<void*>(M::patternScan("client", kBaseEntityPattern));
 	}
 
 	int get_highest_entity_index() {
