@@ -1,0 +1,23 @@
+# Local backups (not tracked)
+_backup/
+
+# Visual Studio / IDE
+.vs/
+*.VC.db
+*.ipch
+*.obj
+*.pdb
+*.ilk
+*.pch
+
+# Build output
+x64/
+[Dd]ebug/
+[Rr]elease/
+*.exe
+
+# Serena
+.serena/
+
+# Large binaries / installers
+OllamaSetup.exe
