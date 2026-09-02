@@ -105,6 +105,14 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     if (!foundationInit)
     {
         foundationInit = g_templeWare.initFoundation();
+        if (foundationInit)
+        {
+            // Establish process-lifetime ownership for compatibility config with
+            // a disabled default snapshot. This proves only the config lifecycle;
+            // it does not enable or execute any gameplay behaviour.
+            VelocityRageCompat::initialize_non_gameplay_defaults();
+            FileLog::Log("[P4COMPAT] NON-GAMEPLAY DEFAULT CONFIG PUBLISHED");
+        }
     }
 
     // Present is the proven-safe Phase 3 runtime validation path. The suspect
@@ -189,9 +197,8 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // pawn/controller pair changes and never enables S3-S7 by itself.
             Phase3C::Run(snapshot);
 
-            // Phase 4 compatibility is allowed to progress in parallel at the
-            // type/adapter level, but the gate remains closed while Phase 3 has
-            // not proven SDK-safe local entity dereferences.
+            // Compatibility readiness is diagnostic-only. Runtime producers stay
+            // closed until their own checkpoint proves them independently.
             VelocityRageCompat::log_readiness(snapshot);
 
             if (snapshot.sdk_deref_safe)
@@ -222,10 +229,11 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         }
         else if (s_wasInGame)
         {
-            // Validate the cache lifecycle without re-enabling a game lifecycle
-            // hook: Present observes the in-game -> out-of-game transition and
-            // performs the reset directly.
+            // Reset both the proven local cache and every volatile compatibility
+            // publication. Config stays published because it is process-lifetime.
             g_local_player_cache->reset();
+            VelocityRageCompat::reset_volatile_runtime();
+            FileLog::Log("[P4COMPAT] VOLATILE RUNTIME RESET");
             Validation::OnLocalPlayerCacheReset();
             const LocalPlayerSnapshot resetSnapshot = g_local_player_cache->get();
 
@@ -303,6 +311,8 @@ DWORD WINAPI MainThread(LPVOID lpReserved)
         Sleep(100);
     } while (!GetAsyncKeyState(VK_END));
 
+    VelocityRageCompat::shutdown_runtime();
+    FileLog::Log("[P4COMPAT] RUNTIME SHUTDOWN CLEAN");
     kiero::shutdown();
     FreeLibraryAndExitThread(g_hModule, EXIT_SUCCESS);
     return TRUE;
