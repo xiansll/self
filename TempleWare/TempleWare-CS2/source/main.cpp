@@ -79,7 +79,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             oWndProc = (WNDPROC)SetWindowLongPtr(window, GWLP_WNDPROC, (LONG_PTR)WndProc);
 
             ImGui::CreateContext();
-            ImGui::GetIO().IniFilename = nullptr;   // no persisted window drift
+            ImGui::GetIO().IniFilename = nullptr;
             ImGui_ImplWin32_Init(window);
             ImGui_ImplDX11_Init(g_pDevice, g_pContext);
 
@@ -106,8 +106,8 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     }
 
     // Phase3A regression-isolation path. Present is already proven to execute,
-    // so use it to validate the local-player/entity plumbing without installing
-    // the suspect FrameStageNotify detour.
+    // so use it to validate local-player plumbing without installing the
+    // suspect FrameStageNotify detour.
     if (foundationInit)
     {
         static bool s_presentDiagnosticLogged = false;
@@ -128,16 +128,28 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             const LocalPlayerSnapshot snapshot = g_local_player_cache->get();
             Validation::OnLocalPlayerCacheUpdate(snapshot);
 
-            if (snapshot.pawn)
+            if (snapshot.sdk_deref_safe)
             {
-                auto* pawn = reinterpret_cast<C_CSPlayerPawn*>(snapshot.pawn);
-                Validation::OnSceneNodeChainCheck(pawn);
-                Validation::OnEntityIdentityCheck(reinterpret_cast<CEntityInstance*>(pawn));
-            }
+                if (snapshot.pawn)
+                {
+                    auto* pawn = reinterpret_cast<C_CSPlayerPawn*>(snapshot.pawn);
+                    Validation::OnSceneNodeChainCheck(pawn);
+                    Validation::OnEntityIdentityCheck(reinterpret_cast<CEntityInstance*>(pawn));
+                }
 
-            if (snapshot.controller)
+                if (snapshot.controller)
+                {
+                    Validation::OnEntityIdentityCheck(reinterpret_cast<CEntityInstance*>(snapshot.controller));
+                }
+            }
+            else if (snapshot.pawn || snapshot.controller)
             {
-                Validation::OnEntityIdentityCheck(reinterpret_cast<CEntityInstance*>(snapshot.controller));
+                static bool s_pointerOnlyLogged = false;
+                if (!s_pointerOnlyLogged)
+                {
+                    FileLog::Log("[Validation] POINTER-ONLY LOCAL FOUND - DEEP SDK DEREF SKIPPED");
+                    s_pointerOnlyLogged = true;
+                }
             }
 
             Validation::LogPeriodicSummary(0);
@@ -146,7 +158,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
-    Gui::MaybeRebuildFont();   // crisp font atlas at current UI scale (before NewFrame)
+    Gui::MaybeRebuildFont();
     ImGui::NewFrame();
 
     Esp::Draw();
@@ -155,7 +167,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     Esp::UpdateTrigger();
     Esp::UpdateMisc();
     Esp::UpdateSkins();
-    nerv_bridge::tick(g_showMenu, (void*)g_ctx->local_pawn, (void*)g_ctx->local_controller);   // feed TW's working local pointers
+    nerv_bridge::tick(g_showMenu, (void*)g_ctx->local_pawn, (void*)g_ctx->local_controller);
 
     static float g_menuAnim = 0.f;
     {
