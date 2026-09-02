@@ -23,6 +23,7 @@
 #include "templeware/utils/validation/validation.h"
 #include "templeware/utils/validation/phase3c_validation.h"
 #include "templeware/compat/velocity_rage_compat.h"
+#include "templeware/compat/velocity_port_context.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -112,6 +113,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // it does not enable or execute any gameplay behaviour.
             VelocityRageCompat::initialize_non_gameplay_defaults();
             FileLog::Log("[P4COMPAT] NON-GAMEPLAY DEFAULT CONFIG PUBLISHED");
+            FileLog::Log("[P5A] READ-ONLY PORT CONTEXT ACTIVE");
         }
     }
 
@@ -201,6 +203,10 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // closed until their own checkpoint proves them independently.
             VelocityRageCompat::log_readiness(snapshot);
 
+            // P5A creates one read-only TempleWare-owned context for future port
+            // consumers. It only aggregates already-owned compatibility state.
+            VelocityRageCompat::g_port_context.update(snapshot, true);
+
             if (snapshot.sdk_deref_safe)
             {
                 if (snapshot.pawn)
@@ -233,6 +239,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // publication. Config stays published because it is process-lifetime.
             g_local_player_cache->reset();
             VelocityRageCompat::reset_volatile_runtime();
+            VelocityRageCompat::g_port_context.reset_volatile();
             FileLog::Log("[P4COMPAT] VOLATILE RUNTIME RESET");
             Validation::OnLocalPlayerCacheReset();
             const LocalPlayerSnapshot resetSnapshot = g_local_player_cache->get();
@@ -311,6 +318,7 @@ DWORD WINAPI MainThread(LPVOID lpReserved)
         Sleep(100);
     } while (!GetAsyncKeyState(VK_END));
 
+    VelocityRageCompat::g_port_context.reset_volatile();
     VelocityRageCompat::shutdown_runtime();
     FileLog::Log("[P4COMPAT] RUNTIME SHUTDOWN CLEAN");
     kiero::shutdown();
