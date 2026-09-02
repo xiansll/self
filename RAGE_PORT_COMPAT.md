@@ -33,12 +33,12 @@ Velocity therefore cannot be dropped into TempleWare as a single `rage.cpp` file
 | `systems::local::snapshot` | Shape available as `LocalPlayerSnapshot` | Use `VelocityRageCompat::local_state` adapter |
 | Local pawn/controller lifecycle | Pointer-only provider works | Keep provenance gate; do not deep-deref until `sdk_deref_safe` is proven |
 | Prediction object | Existing `C_Prediction` exists | Treat as partial until its runtime contract is validated for the port |
-| Basic line trace | Existing `Trace` service exists, runtime currently unresolved | Rich Velocity trace result/filter adapter still missing |
-| Entity cache / lookup | TempleWare has entity systems, but API differs | Build an adapter; do not make Velocity depend directly on TempleWare internals |
-| Bones | Existing project has bone-related code, but no validated Velocity-compatible service contract yet | Add a dedicated adapter after SDK layout is proven |
-| Hitboxes | No validated Velocity-compatible adapter yet | Add a dedicated query/result adapter |
+| Basic line trace | Existing `Trace` service exists, runtime currently unresolved | Rich trace DTO contract exists; runtime producer remains gated |
+| Entity cache / lookup | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
+| Bones | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
+| Hitboxes | DTO contract exists | Runtime producer remains gated until SDK-safe access is proven |
 | Rage settings | TempleWare config schema does not match Velocity Rage settings | Add a separate config adapter; keep it isolated from runtime behaviour |
-| CreateMove lifecycle | Non-operational lifecycle contract now exists | Runtime command acquisition stays disabled until a separately validated source is available |
+| CreateMove lifecycle | Non-operational lifecycle contract exists | Runtime command acquisition stays disabled until a separately validated source is available |
 
 ## Current Runtime Blockers
 
@@ -66,7 +66,7 @@ It provides:
 
 Contract implemented by `source/templeware/compat/velocity_command_compat.h`.
 
-It now provides:
+It provides:
 
 - one TempleWare-owned location for a future validated `CUserCmd*`
 - explicit begin/end/reset ownership
@@ -78,14 +78,16 @@ The contract is considered present at compile time, but `command_runtime` intent
 
 ### P4C - Data service adapters
 
-Required later:
+Contract layer implemented by `source/templeware/compat/velocity_data_compat.h`.
 
-- entity lookup/cache contract
-- bone data contract
-- hitbox contract
-- rich trace result contract
+It now provides non-operational compatibility shapes for:
 
-Each adapter should be independently testable and must not rely on unproven pointer-only wrapper dereferences.
+- entity references
+- bone poses and skeleton snapshots
+- hitbox entries and hitbox sets
+- rich trace results
+
+The compile-time adapter flags are now separate from runtime producer flags. This means `entities/bones/hitboxes/rich_trace` may report adapter=1 while the corresponding runtime state remains 0. No live entity, bone, hitbox, or trace acquisition was added by this checkpoint.
 
 ### P4D - Config adapter
 
@@ -106,10 +108,10 @@ The compatibility gate stays BLOCKED until all of these are true:
 5. trace runtime is available
 6. command lifecycle contract exists
 7. command runtime source is proven
-8. entity cache adapter exists
-9. bone adapter exists
-10. hitbox adapter exists
-11. rich trace adapter exists
+8. entity cache contract exists and its runtime producer is proven
+9. bone contract exists and its runtime producer is proven
+10. hitbox contract exists and its runtime producer is proven
+11. rich trace contract exists and its runtime producer is proven
 12. Rage config adapter exists
 
 Only after that should the Velocity Rage source be mechanically adapted against the compatibility interfaces.
