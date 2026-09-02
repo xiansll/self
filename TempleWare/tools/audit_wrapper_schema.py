@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only audit for the basic P3D wrapper fields.
+"""Read-only audit for the P3D wrapper diagnostics.
 
 Compares the offsets that TempleWare's static SchemaFinder table will return
 against the repository's current alldump/client_dll.json. This tool never
@@ -25,10 +25,12 @@ TABLE_PATH = (
     / "schema_offsets_table.h"
 )
 
-# Exact read-only fields used by Phase3D::ProbeBasicWrappers.
-BASIC_WRAPPER_FIELDS = (
+# Exact read-only fields used by the P3D semantic and pointer-identity probes.
+WRAPPER_DIAGNOSTIC_FIELDS = (
+    "C_BaseEntity->m_iMaxHealth",
     "C_BaseEntity->m_iHealth",
     "C_BaseEntity->m_iTeamNum",
+    "CBasePlayerController->m_hPawn",
     "CBasePlayerController->m_bIsLocalPlayerController",
     "CCSPlayerController->m_bPawnIsAlive",
 )
@@ -111,12 +113,12 @@ def main() -> int:
         return 2
 
     failures = 0
-    print("P3D basic wrapper schema audit")
+    print("P3D wrapper schema audit")
     print(f"dump : {DUMP_PATH}")
     print(f"table: {TABLE_PATH}")
     print()
 
-    for field_path in BASIC_WRAPPER_FIELDS:
+    for field_path in WRAPPER_DIAGNOSTIC_FIELDS:
         expected_hash = fnv1a32(field_path)
         dump_offset = resolve_dump_field(classes, field_path)
         table_entry = table.get(expected_hash)
