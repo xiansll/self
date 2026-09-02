@@ -26,9 +26,12 @@ inline void LogSimple(const char* stage, const char* status, const char* detail 
 }
 
 // Keep SEH in tiny leaf helpers that contain no C++ objects requiring unwind.
-// MSVC rejects __try inside Run() because that function constructs a temporary
-// std::string for modules.getModule("client"). These helpers preserve the same
-// diagnostic behavior without changing resolver patterns, arguments, or calls.
+// The normal cached getters remain untouched. Fresh-candidate helpers below are
+// diagnostic-only and use the exact call signatures/arguments already present
+// in IEntitySystem.h; they do not publish or dereference returned objects.
+using DiagnosticPawnFn = C_CSPlayerPawn* (__fastcall*)(int);
+using DiagnosticControllerFn = void* (__fastcall*)(int);
+
 inline C_CSPlayerPawn* SehGetLocalPawn(I_EntitySystem* entitySystem, DWORD* exceptionCode) {
     C_CSPlayerPawn* result = nullptr;
     if (exceptionCode)
@@ -55,6 +58,42 @@ inline CCSPlayerController* SehGetLocalController(I_EntitySystem* entitySystem, 
         result = entitySystem
             ? reinterpret_cast<CCSPlayerController*>(entitySystem->get_local_controller())
             : nullptr;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (exceptionCode)
+            *exceptionCode = GetExceptionCode();
+        result = nullptr;
+    }
+
+    return result;
+}
+
+inline C_CSPlayerPawn* SehCallPawnCandidate(void* candidate, DWORD* exceptionCode) {
+    C_CSPlayerPawn* result = nullptr;
+    if (exceptionCode)
+        *exceptionCode = 0;
+
+    __try {
+        const auto fn = reinterpret_cast<DiagnosticPawnFn>(candidate);
+        result = fn ? fn(0) : nullptr;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (exceptionCode)
+            *exceptionCode = GetExceptionCode();
+        result = nullptr;
+    }
+
+    return result;
+}
+
+inline CCSPlayerController* SehCallControllerCandidate(void* candidate, DWORD* exceptionCode) {
+    CCSPlayerController* result = nullptr;
+    if (exceptionCode)
+        *exceptionCode = 0;
+
+    __try {
+        const auto fn = reinterpret_cast<DiagnosticControllerFn>(candidate);
+        result = fn ? reinterpret_cast<CCSPlayerController*>(fn(-1)) : nullptr;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         if (exceptionCode)
@@ -109,7 +148,7 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
 
     // Cached addresses are the exact resolver values used by the normal SDK
     // getters. Raw/candidate values are fresh diagnostic scans using the same
-    // already-existing patterns. None of these calls invoke a game function.
+    // already-existing patterns.
     void* pawnResolver = I::EntitySystem->diagnostic_local_pawn_resolver();
     void* controllerResolver = I::EntitySystem->diagnostic_local_controller_resolver();
     void* pawnRaw = I::EntitySystem->diagnostic_local_pawn_raw_match();
@@ -137,29 +176,85 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         controllerCacheParity ? 1 : 0);
     LogSimple("S1.1 cache-parity", cacheParity ? "PASS" : "FAIL", parityBuf);
 
+    // When the strict scan succeeds but the one-shot cached resolver is null,
+    // validate the fresh candidates directly under SEH. This gives us the final
+    // evidence needed to distinguish a pure null-cache/init-order bug from a
+    // callable-semantics problem, without enabling the normal SDK path.
+    C_CSPlayerPawn* freshPawn = nullptr;
+    CCSPlayerController* freshController = nullptr;
+    DWORD freshPawnException = 0;
+    DWORD freshControllerException = 0;
+
+    if (pawnCandidate) {
+        freshPawn = SehCallPawnCandidate(pawnCandidate, &freshPawnException);
+        char buf[320];
+        const bool match = freshPawn && snapshot.pawn &&
+            reinterpret_cast<std::uintptr_t>(freshPawn) == snapshot.pawn;
+        std::snprintf(buf, sizeof(buf),
+            "candidate=%p result=%p reference=%p match=%d exception=0x%08lX",
+            pawnCandidate,
+            static_cast<void*>(freshPawn),
+            reinterpret_cast<void*>(snapshot.pawn),
+            match ? 1 : 0,
+            freshPawnException);
+        LogSimple("S1.2 fresh-pawn-call",
+            freshPawnException ? "FAIL" : (match ? "PASS" : "FAIL"), buf);
+    }
+    else {
+        LogSimple("S1.2 fresh-pawn-call", "SKIP", "fresh candidate missing");
+    }
+
+    if (controllerRaw) {
+        freshController = SehCallControllerCandidate(controllerRaw, &freshControllerException);
+        char buf[320];
+        const bool match = freshController && snapshot.controller &&
+            reinterpret_cast<std::uintptr_t>(freshController) == snapshot.controller;
+        std::snprintf(buf, sizeof(buf),
+            "candidate=%p result=%p reference=%p match=%d exception=0x%08lX",
+            controllerRaw,
+            static_cast<void*>(freshController),
+            reinterpret_cast<void*>(snapshot.controller),
+            match ? 1 : 0,
+            freshControllerException);
+        LogSimple("S1.3 fresh-controller-call",
+            freshControllerException ? "FAIL" : (match ? "PASS" : "FAIL"), buf);
+    }
+    else {
+        LogSimple("S1.3 fresh-controller-call", "SKIP", "fresh candidate missing");
+    }
+
+    const bool freshPawnMatches = freshPawn && snapshot.pawn &&
+        reinterpret_cast<std::uintptr_t>(freshPawn) == snapshot.pawn;
+    const bool freshControllerMatches = freshController && snapshot.controller &&
+        reinterpret_cast<std::uintptr_t>(freshController) == snapshot.controller;
+    const bool freshCallsReady = freshPawnMatches && freshControllerMatches &&
+        freshPawnException == 0 && freshControllerException == 0;
+
     // Produce one useful root-cause classification instead of just another null
-    // address. This is intentionally conservative: it identifies the failing
-    // layer but does not update signatures, offsets, call arguments, or hooks.
+    // address. No signatures, offsets, call arguments, or hooks are updated here.
     if (!winClient) {
         LogSimple("DIAGNOSIS", "BLOCKER", "client.dll is not visible through Win32 module lookup");
     }
     else if (!registryClient) {
         LogSimple("DIAGNOSIS", "BLOCKER", "client module is loaded but TempleWare module registry has no 'client' entry");
     }
-    else if (!pawnPatternReady && pawnResolver) {
-        LogSimple("DIAGNOSIS", "BLOCKER", "pawn strict scan misses while cached resolver is non-null; scanner false-positive/stale-cache path suspected");
-    }
     else if (!pawnPatternReady || !controllerPatternReady) {
         LogSimple("DIAGNOSIS", "BLOCKER", "one or more existing resolver patterns do not match the currently loaded client module");
     }
-    else if (!pawnResolver || !controllerResolver) {
-        LogSimple("DIAGNOSIS", "BLOCKER", "fresh raw patterns resolve but cached resolver is null; one-shot null cache/init-order path suspected");
+    else if ((!pawnResolver || !controllerResolver) && freshCallsReady) {
+        LogSimple("DIAGNOSIS", "CACHE BUG CONFIRMED", "fresh resolver candidates return the reference local pair while one-shot cached resolvers remain null");
+    }
+    else if (freshPawnException || freshControllerException) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "fresh resolver candidate raised an exception; callable semantics are not proven");
+    }
+    else if (!freshCallsReady && (!pawnResolver || !controllerResolver)) {
+        LogSimple("DIAGNOSIS", "BLOCKER", "fresh resolver bytes exist but returned local pointers do not match the reference pair");
     }
     else if (!cacheParity) {
         LogSimple("DIAGNOSIS", "BLOCKER", "fresh resolver candidate differs from the cached resolver address");
     }
     else {
-        LogSimple("DIAGNOSIS", "SCAN LAYER READY", "module, strict patterns, and cached resolver addresses are coherent; pointer-call parity is next gate");
+        LogSimple("DIAGNOSIS", "SCAN LAYER READY", "module, patterns, cached resolver addresses, and fresh-call parity are coherent");
     }
 
     char resolverBuf[256];
@@ -243,12 +338,15 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     const bool controllerMatches = sdkController &&
         reinterpret_cast<std::uintptr_t>(sdkController) == snapshot.controller;
 
-    const bool gateReady = moduleReady && strictPatternsReady && cacheParity &&
+    const bool cachedGateReady = moduleReady && strictPatternsReady && cacheParity &&
         resolverAddressesReady && providerAlias && pawnMatches && controllerMatches &&
         !pawnCallException && !controllerCallException;
 
-    if (gateReady) {
-        LogSimple("GATE", "PASS", "resolver provenance and local pointer parity are proven; deep wrapper validation remains separately disabled");
+    if (cachedGateReady) {
+        LogSimple("GATE", "PASS", "cached resolver provenance and local pointer parity are proven; deep wrapper validation remains separately disabled");
+    }
+    else if (moduleReady && strictPatternsReady && providerAlias && freshCallsReady) {
+        LogSimple("GATE", "FRESH RESOLVER PROVEN", "fresh candidates match the local pair; cached resolver repair is the remaining SDK gate");
     }
     else {
         LogSimple("GATE", "BLOCKED", "resolver provenance is not fully proven; wrapper/identity/scene probes remain disabled");
