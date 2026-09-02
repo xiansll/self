@@ -117,7 +117,11 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             s_presentDiagnosticLogged = true;
         }
 
-        if (I::EngineClient && I::GameEntity && I::GameEntity->Instance &&
+        const bool hasEntityProvider =
+            I::EntitySystem != nullptr ||
+            (I::GameEntity && I::GameEntity->Instance);
+
+        if (I::EngineClient && hasEntityProvider &&
             I::EngineClient->connected() && I::EngineClient->in_game())
         {
             g_local_player_cache->update();
