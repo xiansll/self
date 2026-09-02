@@ -22,6 +22,7 @@
 #include "templeware/utils/localplayer/localplayer.h"
 #include "templeware/utils/validation/validation.h"
 #include "templeware/utils/validation/phase3c_validation.h"
+#include "templeware/utils/validation/phase3d_validation.h"
 #include "templeware/compat/velocity_rage_compat.h"
 #include "templeware/compat/velocity_port_context.h"
 
@@ -114,12 +115,29 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             VelocityRageCompat::initialize_non_gameplay_defaults();
             FileLog::Log("[P4COMPAT] NON-GAMEPLAY DEFAULT CONFIG PUBLISHED");
             FileLog::Log("[P5A] READ-ONLY PORT CONTEXT ACTIVE");
+
+            // Trace::Initialize() runs very early with the overlay. Re-run only
+            // the exact existing resolver expressions after foundation init so
+            // we can distinguish an early-null timing problem from a true miss.
+            const bool traceReadyAfterRetry = Trace::DiagnoseAndRetryExistingResolvers();
+            const Trace::ResolverDiagnostics traceDiag = Trace::GetResolverDiagnostics();
+            char traceBuf[384];
+            std::snprintf(traceBuf, sizeof(traceBuf),
+                "[P5B] TRACE RESOLVER DIAG ready=%d client=%d mgr=%p ray=%p filt=%p fresh_ray=%p fresh_filt=%p",
+                traceReadyAfterRetry ? 1 : 0,
+                traceDiag.client_loaded ? 1 : 0,
+                reinterpret_cast<void*>(traceDiag.manager),
+                reinterpret_cast<void*>(traceDiag.trace_ray),
+                reinterpret_cast<void*>(traceDiag.filter_init),
+                reinterpret_cast<void*>(traceDiag.fresh_trace_ray),
+                reinterpret_cast<void*>(traceDiag.fresh_filter_init));
+            FileLog::Log(traceBuf);
         }
     }
 
     // Present is the proven-safe Phase 3 runtime validation path. The suspect
-    // FrameStageNotify detour stays disabled. Phase 3C is resolver-gated: no
-    // pointer-only local is dereferenced through TempleWare wrappers here.
+    // FrameStageNotify detour stays disabled. Phase 3C proves resolver provenance;
+    // Phase 3D separately proves a small basic wrapper surface.
     if (foundationInit)
     {
         static bool s_presentDiagnosticLogged = false;
@@ -129,6 +147,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         static bool s_pawnChangeLogged = false;
         static bool s_lifecycleOkLogged = false;
         static bool s_phase3cActiveLogged = false;
+        static bool s_phase3dActiveLogged = false;
         static bool s_wasInGame = false;
         static std::uintptr_t s_lastPawn = 0;
 
@@ -150,26 +169,32 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             s_phase3cActiveLogged = true;
         }
 
+        if (!s_phase3dActiveLogged)
+        {
+            FileLog::Log("[P3D] ACTIVE - BASIC WRAPPER SEMANTIC VALIDATION");
+            s_phase3dActiveLogged = true;
+        }
+
         const bool inGame = I::EngineClient &&
             I::EngineClient->connected() && I::EngineClient->in_game();
 
         if (inGame)
         {
-            // LocalPlayerCache owns provider selection. This remains pointer-only
-            // when the selected source is not proven safe for TempleWare wrapper
-            // dereferences.
             g_local_player_cache->update();
             const LocalPlayerSnapshot snapshot = g_local_player_cache->get();
             Validation::OnLocalPlayerCacheUpdate(snapshot);
 
             if (!s_providerOkLogged && snapshot.pawn && snapshot.controller)
             {
-                char buf[256];
+                char buf[320];
                 std::snprintf(buf, sizeof(buf),
-                    "[P3B] LOCAL PROVIDER OK pawn=%p controller=%p sdk_safe=%d",
+                    "[P3B] LOCAL PROVIDER OK pawn=%p controller=%p resolver=%d wrapper=%d sdk_safe=%d deep_safe=%d",
                     reinterpret_cast<void*>(snapshot.pawn),
                     reinterpret_cast<void*>(snapshot.controller),
-                    snapshot.sdk_deref_safe ? 1 : 0);
+                    snapshot.sdk_resolver_pair_proven ? 1 : 0,
+                    snapshot.sdk_wrapper_semantics_proven ? 1 : 0,
+                    snapshot.sdk_deref_safe ? 1 : 0,
+                    snapshot.sdk_deep_graph_safe ? 1 : 0);
                 FileLog::Log(buf);
                 s_providerOkLogged = true;
             }
@@ -195,9 +220,8 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                 s_lastPawn = snapshot.pawn;
             }
 
-            // Resolver-only P3C checkpoint. It reruns only when the selected
-            // pawn/controller pair changes and never enables S3-S7 by itself.
             Phase3C::Run(snapshot);
+            Phase3D::Run(snapshot);
 
             // Compatibility readiness is diagnostic-only. Runtime producers stay
             // closed until their own checkpoint proves them independently.
@@ -207,7 +231,9 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // consumers. It only aggregates already-owned compatibility state.
             VelocityRageCompat::g_port_context.update(snapshot, true);
 
-            if (snapshot.sdk_deref_safe)
+            // Basic wrapper proof is intentionally insufficient to open identity,
+            // scene-node, or skeleton traversal. Those remain on a separate gate.
+            if (snapshot.sdk_deep_graph_safe)
             {
                 if (snapshot.pawn)
                 {
@@ -221,12 +247,21 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                     Validation::OnEntityIdentityCheck(reinterpret_cast<CEntityInstance*>(snapshot.controller));
                 }
             }
+            else if (snapshot.sdk_deref_safe)
+            {
+                static bool s_basicWrapperOnlyLogged = false;
+                if (!s_basicWrapperOnlyLogged)
+                {
+                    FileLog::Log("[Validation] BASIC WRAPPER SAFE - DEEP IDENTITY/SCENE GRAPH STILL SKIPPED");
+                    s_basicWrapperOnlyLogged = true;
+                }
+            }
             else if (snapshot.pawn || snapshot.controller)
             {
                 static bool s_pointerOnlyLogged = false;
                 if (!s_pointerOnlyLogged)
                 {
-                    FileLog::Log("[Validation] POINTER-ONLY LOCAL FOUND - NORMAL DEEP SDK DEREF SKIPPED");
+                    FileLog::Log("[Validation] POINTER-ONLY/RESOLVER-ONLY LOCAL - WRAPPER DEREF SKIPPED");
                     s_pointerOnlyLogged = true;
                 }
             }
@@ -236,7 +271,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         else if (s_wasInGame)
         {
             // Reset both the proven local cache and every volatile compatibility
-            // publication. Config stays published because it is process-lifetime.
+            // publication. Config and process-level wrapper proof stay published.
             g_local_player_cache->reset();
             VelocityRageCompat::reset_volatile_runtime();
             VelocityRageCompat::g_port_context.reset_volatile();
