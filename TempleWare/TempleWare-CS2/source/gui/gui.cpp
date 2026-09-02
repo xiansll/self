@@ -1,0 +1,1191 @@
+﻿#include "gui.h"
+#include "../esp/esp.h"
+#include "../trace/trace.h"
+#include "../icons/icons.h"
+#include "../templeware/config/gui_config.h"
+#include "../templeware/config/config.h"
+#include "../templeware/features/skinchanger/skinchanger.h"
+
+#include "../../external/imgui/imgui.h"
+#include "../nerv/nerv_bridge.h"
+#include "../../external/imgui/imgui_impl_dx11.h"
+
+#include <windows.h>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+// =====================================================================
+//  NEXUS â€” fully custom-drawn UI (ImGui used only as the vertex batcher)
+// =====================================================================
+namespace
+{
+    // ---- palette ----
+    ImVec4 RGBA(int r, int g, int b, int a = 255) { return ImVec4(r / 255.f, g / 255.f, b / 255.f, a / 255.f); }
+    ImU32  U32(const ImVec4& c) { return ImGui::ColorConvertFloat4ToU32(c); }
+    ImVec4 Lerp4(const ImVec4& a, const ImVec4& b, float t) { return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t); }
+    ImVec4 WithA(ImVec4 c, float a) { c.w = a; return c; }
+
+    ImVec4 g_accent = RGBA(245, 130, 30);
+    const ImVec4 BG0   = RGBA(13, 13, 15);
+    const ImVec4 BG1   = RGBA(20, 20, 24);
+    const ImVec4 CARD  = RGBA(26, 26, 31);
+    const ImVec4 FRAME = RGBA(34, 34, 41);
+    const ImVec4 BORDER= RGBA(40, 40, 47);
+    const ImVec4 TEXT  = RGBA(238, 238, 242);
+    const ImVec4 DIM   = RGBA(120, 120, 130);
+    const ImVec4 GREEN = RGBA(90, 210, 120);
+
+    float g_uiScale = 1.0f;
+    int   g_builtFontPx = -1;
+    bool  g_needCenter = true;
+    int   g_nav = 1;       // start on Aimbot to match the reference
+    int   g_sub = 0;
+
+    float S(float x) { return x * g_uiScale; }
+
+    // ---- animation ----
+    std::unordered_map<ImGuiID, float> g_anim;
+    float Anim(ImGuiID id, float target, float speed = 12.f)
+    {
+        float dt = ImGui::GetIO().DeltaTime; if (dt <= 0.f) dt = 1.f / 60.f;
+        float& v = g_anim[id];
+        v += (target - v) * (speed * dt < 1.f ? speed * dt : 1.f);
+        return v;
+    }
+
+    ImDrawList* DL() { return ImGui::GetWindowDrawList(); }
+
+    // ---- primitives ----
+    void RectF(ImVec2 a, ImVec2 b, ImU32 col, float r = 0.f) { DL()->AddRectFilled(a, b, col, r); }
+    void Rect(ImVec2 a, ImVec2 b, ImU32 col, float r = 0.f, float th = 1.f) { DL()->AddRect(a, b, col, r, 0, th); }
+    void Text(ImVec2 p, ImU32 col, const char* t)
+    {
+        const char* h = std::strstr(t, "##");   // hide id-disambiguation suffix
+        if (h) { char b[128]; int n = (int)(h - t); if (n > 127) n = 127; std::memcpy(b, t, n); b[n] = 0; DL()->AddText(p, col, b); }
+        else DL()->AddText(p, col, t);
+    }
+    void TextR(float rightX, float y, ImU32 col, const char* t) { const ImVec2 s = ImGui::CalcTextSize(t); DL()->AddText(ImVec2(rightX - s.x, y), col, t); }
+    float TW(const char* t) { return ImGui::CalcTextSize(t).x; }
+    float TH() { return ImGui::GetFontSize(); }
+
+    // ---------------------------------------------------------------
+    //  Widgets â€” each takes an absolute rect and advances nothing; the
+    //  page code positions them. Interaction via InvisibleButton.
+    // ---------------------------------------------------------------
+    bool Hit(const char* id, ImVec2 pos, ImVec2 size, bool& hovered)
+    {
+        ImGui::SetCursorScreenPos(pos);
+        ImGui::InvisibleButton(id, size);
+        hovered = ImGui::IsItemHovered();
+        return ImGui::IsItemClicked();
+    }
+
+    // Minimal line icons for the sidebar (hand-drawn, index = nav item).
+    void NavIcon(int idx, float cx, float cy, ImU32 col)
+    {
+        ImDrawList* d = DL();
+        const float u = S(8.f);        // half-size
+        const float th = S(1.6f);
+        auto L = [&](float x1, float y1, float x2, float y2) { d->AddLine(ImVec2(cx + x1, cy + y1), ImVec2(cx + x2, cy + y2), col, th); };
+        auto R = [&](float x1, float y1, float x2, float y2) { d->AddRect(ImVec2(cx + x1, cy + y1), ImVec2(cx + x2, cy + y2), col, S(1.5f), 0, th); };
+        auto C = [&](float x, float y, float r) { d->AddCircle(ImVec2(cx + x, cy + y), r, col, 16, th); };
+        switch (idx)
+        {
+        case 0: // Dashboard - grid
+            R(-u, -u, -1, -1); R(1, -u, u, -1); R(-u, 1, -1, u); R(1, 1, u, u); break;
+        case 1: // Aimbot - crosshair
+            C(0, 0, u * 0.7f); L(0, -u, 0, -u * 0.4f); L(0, u * 0.4f, 0, u); L(-u, 0, -u * 0.4f, 0); L(u * 0.4f, 0, u, 0); break;
+        case 2: // Visuals - eye
+            d->AddBezierCurve(ImVec2(cx - u, cy), ImVec2(cx - u * 0.3f, cy - u), ImVec2(cx + u * 0.3f, cy - u), ImVec2(cx + u, cy), col, th);
+            d->AddBezierCurve(ImVec2(cx - u, cy), ImVec2(cx - u * 0.3f, cy + u), ImVec2(cx + u * 0.3f, cy + u), ImVec2(cx + u, cy), col, th);
+            C(0, 0, u * 0.35f); break;
+        case 3: // World - cube
+            R(-u, -u * 0.6f, u * 0.4f, u); L(-u, -u * 0.6f, -u * 0.4f, -u); L(u * 0.4f, -u * 0.6f, u, -u); L(u * 0.4f, u, u, u * 0.4f); L(-u * 0.4f, -u, u, -u); break;
+        case 4: // Movement - run (chevrons)
+            L(-u, -u, 0, 0); L(0, 0, -u, u); L(0, -u, u, 0); L(u, 0, 0, u); break;
+        case 5: // Inventory - pistol (simple)
+            L(-u, -u * 0.4f, u, -u * 0.4f); L(-u, -u * 0.4f, -u, u * 0.4f); L(-u * 0.3f, -u * 0.4f, -u * 0.3f, u); break;
+        case 6: // Misc - sliders
+            L(-u, -u * 0.5f, u, -u * 0.5f); L(-u, u * 0.5f, u, u * 0.5f); d->AddCircleFilled(ImVec2(cx + u * 0.2f, cy - u * 0.5f), S(2.f), col); d->AddCircleFilled(ImVec2(cx - u * 0.3f, cy + u * 0.5f), S(2.f), col); break;
+        case 7: // Configs - folder
+            L(-u, -u * 0.4f, -u * 0.2f, -u * 0.4f); L(-u * 0.2f, -u * 0.4f, 0, -u * 0.7f); L(0, -u * 0.7f, u, -u * 0.7f); R(-u, -u * 0.4f, u, u * 0.7f); break;
+        case 8: // Lua - code brackets
+            L(-u * 0.3f, -u, -u, 0); L(-u, 0, -u * 0.3f, u); L(u * 0.3f, -u, u, 0); L(u, 0, u * 0.3f, u); break;
+        default: // Settings - gear
+            C(0, 0, u * 0.55f); for (int k = 0; k < 8; ++k) { float a = k * 0.785f; L(cosf(a) * u * 0.55f, sinf(a) * u * 0.55f, cosf(a) * u, sinf(a) * u); } break;
+        }
+    }
+
+    // Orange pill toggle at (x,y). Returns clicked.
+    bool Toggle(const char* id, float x, float y, bool* v)
+    {
+        const float w = S(38.f), h = S(20.f);
+        bool hov = false;
+        const bool clk = Hit(id, ImVec2(x, y), ImVec2(w, h), hov);
+        if (clk) *v = !*v;
+        const float on = Anim(ImGui::GetID(id), *v ? 1.f : 0.f, 16.f);
+        const ImU32 track = U32(Lerp4(FRAME, g_accent, on));
+        RectF(ImVec2(x, y), ImVec2(x + w, y + h), track, h * 0.5f);
+        const float kr = h * 0.5f - S(2.5f);
+        const float kx = x + S(2.5f) + kr + (w - S(5.f) - 2 * kr) * on;
+        DL()->AddCircleFilled(ImVec2(kx, y + h * 0.5f), kr, U32(RGBA(255, 255, 255)));
+        return clk;
+    }
+
+    // Slider row: label at left of `x`, track from x..x+tw, value at right.
+    void Slider(const char* id, float x, float y, float tw, float* val, float mn, float mx, const char* fmt, bool isInt = false)
+    {
+        const float h = S(4.f);
+        const float cy = y + TH() * 0.5f;
+        bool hov = false;
+        ImGui::SetCursorScreenPos(ImVec2(x, y - S(6.f)));
+        ImGui::InvisibleButton(id, ImVec2(tw, TH() + S(6.f)));
+        const bool active = ImGui::IsItemActive();
+        hov = ImGui::IsItemHovered();
+        if (active)
+        {
+            const float t = (ImGui::GetIO().MousePos.x - x) / tw;
+            float nt = t < 0 ? 0 : (t > 1 ? 1 : t);
+            *val = mn + (mx - mn) * nt;
+            if (isInt) *val = std::floor(*val + 0.5f);
+        }
+        const float frac = (mx > mn) ? ((*val - mn) / (mx - mn)) : 0.f;
+        RectF(ImVec2(x, cy - h * 0.5f), ImVec2(x + tw, cy + h * 0.5f), U32(FRAME), h * 0.5f);
+        RectF(ImVec2(x, cy - h * 0.5f), ImVec2(x + tw * frac, cy + h * 0.5f), U32(g_accent), h * 0.5f);
+        DL()->AddCircleFilled(ImVec2(x + tw * frac, cy), S(5.f), U32(RGBA(255, 255, 255)));
+        char buf[32];
+        if (isInt) std::snprintf(buf, sizeof(buf), fmt, (int)(*val + 0.5f));
+        else       std::snprintf(buf, sizeof(buf), fmt, *val);
+        TextR(x + tw + S(46.f), y, U32(TEXT), buf);
+    }
+    void SliderI(const char* id, float x, float y, float tw, int* val, int mn, int mx, const char* fmt)
+    {
+        float f = (float)*val; Slider(id, x, y, tw, &f, (float)mn, (float)mx, fmt, true); *val = (int)(f + 0.5f);
+    }
+
+    // Custom dropdown. Draws closed box at rect; opens a styled popup.
+    bool Combo(const char* id, float x, float y, float w, int* val, const char* const* items, int count)
+    {
+        const float h = S(26.f);
+        bool hov = false;
+        const bool clk = Hit(id, ImVec2(x, y), ImVec2(w, h), hov);
+        RectF(ImVec2(x, y), ImVec2(x + w, y + h), U32(FRAME), S(5.f));
+        if (hov) Rect(ImVec2(x, y), ImVec2(x + w, y + h), U32(WithA(g_accent, 0.5f)), S(5.f));
+        const char* cur = (*val >= 0 && *val < count) ? items[*val] : "";
+        Text(ImVec2(x + S(10.f), y + (h - TH()) * 0.5f), U32(TEXT), cur);
+        // arrow
+        const float ax = x + w - S(16.f), ay = y + h * 0.5f;
+        DL()->AddTriangleFilled(ImVec2(ax - S(4.f), ay - S(2.f)), ImVec2(ax + S(4.f), ay - S(2.f)), ImVec2(ax, ay + S(3.f)), U32(DIM));
+        if (clk) ImGui::OpenPopup(id);
+
+        bool changed = false;
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, U32(BG1));
+        ImGui::PushStyleColor(ImGuiCol_Border, U32(BORDER));
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, S(6.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(S(4.f), S(4.f)));
+        ImGui::SetNextWindowPos(ImVec2(x, y + h + S(3.f)));
+        ImGui::SetNextWindowSize(ImVec2(w, 0));
+        if (ImGui::BeginPopup(id))
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                const bool sel = (i == *val);
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, U32(WithA(g_accent, 0.25f)));
+                ImGui::PushStyleColor(ImGuiCol_Text, sel ? U32(g_accent) : U32(TEXT));
+                if (ImGui::Selectable(items[i], sel)) { *val = i; changed = true; }
+                ImGui::PopStyleColor(2);
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
+        return changed;
+    }
+
+    // Keybind button: click to listen, next key/mouse becomes the bind.
+    const char* KeyName(int k)
+    {
+        static char buf[32];
+        switch (k)
+        {
+        case 0: return "NONE";
+        case 1: return "MOUSE 1"; case 2: return "MOUSE 2"; case 4: return "MOUSE 3";
+        case 5: return "MOUSE 4"; case 6: return "MOUSE 5";
+        case VK_SPACE: return "SPACE"; case VK_SHIFT: return "SHIFT"; case VK_MENU: return "ALT";
+        case VK_CONTROL: return "CTRL"; case VK_TAB: return "TAB"; case VK_INSERT: return "INSERT";
+        }
+        UINT sc = MapVirtualKeyA(k, MAPVK_VK_TO_VSC);
+        if (sc && GetKeyNameTextA((LONG)(sc << 16), buf, sizeof(buf)) > 0) return buf;
+        std::snprintf(buf, sizeof(buf), "0x%02X", k);
+        return buf;
+    }
+    static int  g_listening = 0;    // ImGuiID of the widget currently listening
+    static bool g_kbArmed = false;  // becomes true once the opening click is released
+    void Keybind(const char* id, float x, float y, float w, int* key)
+    {
+        const float h = S(26.f);
+        const ImGuiID wid = ImGui::GetID(id);
+        bool hov = false;
+        const bool clk = Hit(id, ImVec2(x, y), ImVec2(w, h), hov);
+        if (clk) { g_listening = (int)wid; g_kbArmed = false; }   // start listening; wait for click release
+        const bool listening = (g_listening == (int)wid);
+
+        RectF(ImVec2(x, y), ImVec2(x + w, y + h), U32(FRAME), S(5.f));
+        if (listening) Rect(ImVec2(x, y), ImVec2(x + w, y + h), U32(g_accent), S(5.f));
+        const char* label = listening ? "Press a key" : KeyName(*key);
+        Text(ImVec2(x + (w - TW(label)) * 0.5f, y + (h - TH()) * 0.5f), U32(listening ? g_accent : TEXT), label);
+
+        if (listening)
+        {
+            // arm only after the mouse buttons that opened the picker are released,
+            // so the opening click isn't captured as the bind.
+            if (!g_kbArmed)
+            {
+                if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000) && !(GetAsyncKeyState(VK_RBUTTON) & 0x8000))
+                    g_kbArmed = true;
+                return;
+            }
+            for (int k = 1; k < 256; ++k)
+            {
+                if (k == VK_CAPITAL || k == VK_NUMLOCK || k == VK_SCROLL) continue; // ignore lock toggles
+                if (GetAsyncKeyState(k) & 0x8000)
+                {
+                    if (k == VK_ESCAPE) { *key = 0; g_listening = 0; break; } // ESC clears
+                    *key = k; g_listening = 0; break;
+                }
+            }
+        }
+    }
+
+    // Small orange section icons for card headers.
+    void SecIcon(int idx, float cx, float cy, ImU32 col)
+    {
+        ImDrawList* d = DL(); const float u = S(7.f), th = S(1.6f);
+        auto L = [&](float x1, float y1, float x2, float y2) { d->AddLine(ImVec2(cx + x1, cy + y1), ImVec2(cx + x2, cy + y2), col, th); };
+        switch (idx)
+        {
+        case 0: // lightning
+            L(1, -u, -3, 1); L(-3, 1, 1, 1); L(1, 1, -1, u); break;
+        case 1: // crosshair
+            d->AddCircle(ImVec2(cx, cy), u * 0.7f, col, 16, th); L(0, -u, 0, -u * 0.4f); L(0, u * 0.4f, 0, u); L(-u, 0, -u * 0.4f, 0); L(u * 0.4f, 0, u, 0); break;
+        case 2: // gauge
+            d->AddCircle(ImVec2(cx, cy + u * 0.2f), u, col, 16, th); L(0, u * 0.2f, u * 0.5f, -u * 0.4f); break;
+        case 3: // hitbox (rounded square + dot)
+            d->AddRect(ImVec2(cx - u, cy - u), ImVec2(cx + u, cy + u), col, S(2.f), 0, th); d->AddCircleFilled(ImVec2(cx, cy), S(1.8f), col); break;
+        case 4: // anti-aim (two arrows)
+            L(-u, 0, u, 0); L(-u, 0, -u * 0.4f, -u * 0.4f); L(-u, 0, -u * 0.4f, u * 0.4f); L(u, 0, u * 0.4f, -u * 0.4f); L(u, 0, u * 0.4f, u * 0.4f); break;
+        default: // keyboard
+            d->AddRect(ImVec2(cx - u, cy - u * 0.6f), ImVec2(cx + u, cy + u * 0.6f), col, S(2.f), 0, th);
+            d->AddCircleFilled(ImVec2(cx - u * 0.4f, cy), S(1.4f), col); d->AddCircleFilled(ImVec2(cx + u * 0.4f, cy), S(1.4f), col); break;
+        }
+    }
+
+    // Card with a title header. Height is supplied explicitly to EndCard()
+    // (bg drawn behind content via a draw-list channel split).
+    struct CardCtx { ImVec2 start; float w; };
+    CardCtx g_card;
+    void BeginCard(const char* title, float x, float y, float w, int icon = -1)
+    {
+        g_card.start = ImVec2(x, y); g_card.w = w;
+        DL()->ChannelsSplit(2); DL()->ChannelsSetCurrent(1);
+        if (title && title[0])
+        {
+            float tx = x + S(16.f);
+            if (icon >= 0) { SecIcon(icon, x + S(22.f), y + S(20.f), U32(g_accent)); tx = x + S(38.f); }
+            Text(ImVec2(tx, y + S(14.f)), U32(TEXT), title);
+        }
+    }
+    float CardBodyY() { return g_card.start.y + S(44.f); }
+    void EndCard(float bottomY)
+    {
+        DL()->ChannelsSetCurrent(0);
+        const ImVec2 a = g_card.start, b(g_card.start.x + g_card.w, bottomY + S(14.f));
+        RectF(a, b, U32(CARD), S(8.f));
+        Rect(a, b, U32(BORDER), S(8.f));
+        DL()->ChannelsMerge();
+    }
+
+    // A labelled control row helper: draws label at (x,y), returns the x for the control on the right side of `rowW`.
+    void Label(float x, float y, const char* t, ImU32 col) { Text(ImVec2(x, y), col, t); }
+
+    // Filled button. `accent` fills with the theme accent; otherwise a frame tint
+    // that lifts toward accent on hover. Returns true on click.
+    bool Button(const char* id, float x, float y, float w, float h, const char* label, bool accent = false)
+    {
+        bool hov = false;
+        const bool clk = Hit(id, ImVec2(x, y), ImVec2(w, h), hov);
+        ImVec4 col = accent ? (hov ? g_accent : WithA(g_accent, 0.85f))
+                            : (hov ? WithA(g_accent, 0.35f) : FRAME);
+        RectF(ImVec2(x, y), ImVec2(x + w, y + h), U32(col), S(6.f));
+        Text(ImVec2(x + (w - TW(label)) * 0.5f, y + (h - TH()) * 0.5f), U32(TEXT), label);
+        return clk;
+    }
+
+    // ---------------- style + font ----------------
+    void ApplyStyle()
+    {
+        ImGuiStyle& s = ImGui::GetStyle();
+        s.WindowRounding = S(12.f); s.WindowBorderSize = 0.f; s.WindowPadding = ImVec2(0, 0);
+        s.Colors[ImGuiCol_WindowBg] = BG0;
+        s.Colors[ImGuiCol_Text] = TEXT;
+    }
+}
+
+// forward page fns
+namespace { void PageAimbot(float, float, float, float); void PageVisuals(float, float, float, float);
+    void PageWorld(float, float, float, float); void PageSettings(float, float, float, float);
+    void PageMisc(float, float, float, float);
+    void PageInventory(float, float, float, float);
+    void PageConfigs(float, float, float, float);
+    void PageSimple(const char*, float, float, float, float); }
+
+namespace Gui
+{
+    void MaybeRebuildFont()
+    {
+        int px = (int)(15.f * g_uiScale + 0.5f); if (px < 8) px = 8;
+        if (px == g_builtFontPx) return;
+        ImGuiIO& io = ImGui::GetIO();
+        io.Fonts->Clear();
+        ImFont* f = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", (float)px);
+        if (!f) io.Fonts->AddFontDefault();
+        io.Fonts->Build();
+        ImGui_ImplDX11_InvalidateDeviceObjects();
+        ImGui_ImplDX11_CreateDeviceObjects();
+        g_builtFontPx = px; io.FontGlobalScale = 1.f;
+    }
+    void CenterWindow() { g_needCenter = true; }
+
+    void Render(float alpha)
+    {
+        ApplyStyle();
+        if (g_uiScale < 0.7f) g_uiScale = 0.7f; if (g_uiScale > 3.0f) g_uiScale = 3.0f;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(12.f));
+        const ImVec2 defSize(S(1180.f), S(760.f));
+        ImGui::SetNextWindowSize(defSize, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(S(900.f), S(600.f)), ImVec2(6000, 4000));
+        if (g_needCenter)
+        {
+            const ImVec2 d = ImGui::GetIO().DisplaySize;
+            ImGui::SetNextWindowPos(ImVec2((d.x - defSize.x) * 0.5f, (d.y - defSize.y) * 0.5f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(defSize, ImGuiCond_Always);
+            g_needCenter = false;
+        }
+        ImGui::Begin("NEXUS##root", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+        const ImVec2 wp = ImGui::GetWindowPos();
+        const ImVec2 ws = ImGui::GetWindowSize();
+        RectF(wp, ImVec2(wp.x + ws.x, wp.y + ws.y), U32(BG0), S(12.f));
+
+        const float sideW = S(210.f);
+        const float pad = S(16.f);
+
+        // ============ SIDEBAR ============
+        {
+            const float sx = wp.x, sy = wp.y;
+            RectF(ImVec2(sx, sy), ImVec2(sx + sideW, wp.y + ws.y), U32(BG1), S(12.f));
+            RectF(ImVec2(sx + sideW - S(1.f), sy), ImVec2(sx + sideW, wp.y + ws.y), U32(BORDER));
+
+            // logo
+            Text(ImVec2(sx + S(24.f), sy + S(26.f)), U32(TEXT), "neXus");
+            // accent dot on the X
+            Text(ImVec2(sx + S(24.f), sy + S(48.f)), U32(g_accent), "CS2");
+            Text(ImVec2(sx + S(24.f) + TW("CS2 "), sy + S(48.f)), U32(DIM), "INTERNAL");
+
+            const char* nav[] = { "Dashboard","Aimbot","Visuals","World","Movement","Inventory","Misc","Configs","Lua Scripts","Settings" };
+            const int navN = 10;
+            float ny = sy + S(90.f);
+            for (int i = 0; i < navN; ++i)
+            {
+                char id[24]; std::snprintf(id, sizeof(id), "##nav%d", i);
+                const float ih = S(40.f);
+                const ImVec2 ip(sx + S(14.f), ny), isz(sideW - S(28.f), ih);
+                bool hov = false;
+                if (Hit(id, ip, isz, hov)) g_nav = i, g_sub = 0;
+                const bool act = (g_nav == i);
+                const float aa = Anim(ImGui::GetID(id), act ? 1.f : 0.f, 12.f);
+                if (aa > 0.01f) { RectF(ip, ImVec2(ip.x + isz.x, ip.y + ih), U32(WithA(g_accent, 0.10f + 0.05f * aa)), S(7.f));
+                                  RectF(ip, ImVec2(ip.x + S(3.f), ip.y + ih), U32(g_accent), S(2.f)); }
+                else if (hov) RectF(ip, ImVec2(ip.x + isz.x, ip.y + ih), U32(WithA(TEXT, 0.05f)), S(7.f));
+                const ImVec4 tc = Lerp4(hov ? Lerp4(DIM, TEXT, 0.6f) : DIM, g_accent, aa);
+                Text(ImVec2(ip.x + S(44.f), ny + (ih - TH()) * 0.5f), U32(tc), nav[i]);
+                NavIcon(i, ip.x + S(22.f), ny + ih * 0.5f, U32(tc));
+                ny += ih + S(4.f);
+            }
+
+            // bottom cards
+            const float by = wp.y + ws.y - S(150.f);
+            RectF(ImVec2(sx + S(14.f), by), ImVec2(sx + sideW - S(14.f), by + S(64.f)), U32(CARD), S(8.f));
+            Text(ImVec2(sx + S(26.f), by + S(12.f)), U32(DIM), "Subscription");
+            Text(ImVec2(sx + S(26.f), by + S(32.f)), U32(g_accent), "Premium");
+            Text(ImVec2(sx + S(26.f), by + S(52.f) - TH() * 0.2f), U32(DIM), "29 days remaining");
+            const float by2 = by + S(74.f);
+            RectF(ImVec2(sx + S(14.f), by2), ImVec2(sx + sideW - S(14.f), by2 + S(56.f)), U32(CARD), S(8.f));
+            Text(ImVec2(sx + S(26.f), by2 + S(10.f)), U32(DIM), "Build");
+            Text(ImVec2(sx + S(26.f), by2 + S(28.f)), U32(TEXT), "v1.0.7");
+            Text(ImVec2(sx + sideW - S(26.f) - TW("Latest"), by2 + S(30.f)), U32(GREEN), "Latest");
+        }
+
+        // ============ TOPBAR ============
+        const float cx = wp.x + sideW;
+        const float contentX = cx + pad;
+        const float contentW = ws.x - sideW - pad * 2.f;
+        const float topH = S(64.f);
+        {
+            // drag strip
+            bool hov = false;
+            ImGui::SetCursorScreenPos(ImVec2(cx, wp.y));
+            ImGui::InvisibleButton("##drag", ImVec2(ws.x - sideW, topH));
+            if (ImGui::IsItemActive()) { const ImVec2 d = ImGui::GetIO().MouseDelta; ImGui::SetWindowPos(ImVec2(wp.x + d.x, wp.y + d.y)); }
+
+            const float ty = wp.y + S(20.f);
+            Text(ImVec2(contentX, ty - S(6.f)), U32(DIM), "Active Config");
+            // config box
+            static int cfgSel = 0; const char* cfgs[] = { "Legit HVH","Rage","Legit","Default" };
+            Combo("##cfg", contentX, ty + S(12.f), S(200.f), &cfgSel, cfgs, 4);
+
+            // right: status + user
+            const float rx = wp.x + ws.x - pad;
+            Text(ImVec2(rx - S(320.f), wp.y + S(18.f)), U32(TEXT), "Counter-Strike 2");
+            Text(ImVec2(rx - S(320.f), wp.y + S(36.f)), U32(GREEN), "Connected");
+            Text(ImVec2(rx - TW("neXus.user"), wp.y + S(18.f)), U32(TEXT), "neXus.user");
+            Text(ImVec2(rx - TW("Premium"), wp.y + S(36.f)), U32(g_accent), "Premium");
+            DL()->AddCircleFilled(ImVec2(rx - S(150.f), wp.y + topH * 0.5f), S(16.f), U32(FRAME));
+            RectF(ImVec2(cx, wp.y + topH - S(1.f)), ImVec2(wp.x + ws.x, wp.y + topH), U32(BORDER));
+        }
+
+        // ============ CONTENT ============
+        const float cyTop = wp.y + topH + pad;
+        const float cH = ws.y - topH - pad * 2.f;
+        switch (g_nav)
+        {
+        case 1: PageAimbot(contentX, cyTop, contentW, cH); break;
+        case 2: PageVisuals(contentX, cyTop, contentW, cH); break;
+        case 3: PageWorld(contentX, cyTop, contentW, cH); break;
+        case 5: PageInventory(contentX, cyTop, contentW, cH); break;
+        case 6: PageMisc(contentX, cyTop, contentW, cH); break;
+        case 7: PageConfigs(contentX, cyTop, contentW, cH); break;
+        case 9: PageSettings(contentX, cyTop, contentW, cH); break;
+        case 0: PageSimple("DASHBOARD", contentX, cyTop, contentW, cH); break;
+        default: PageSimple(nullptr, contentX, cyTop, contentW, cH); break;
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+    }
+}
+
+// =====================================================================
+//  Pages
+// =====================================================================
+namespace
+{
+    // sub-tab column; returns nothing, sets g_sub
+    void SubTabs(float x, float& y, const char* const* tabs, int n)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            char id[24]; std::snprintf(id, sizeof(id), "##sub%d", i);
+            const float h = S(34.f), w = S(120.f);
+            bool hov = false;
+            if (Hit(id, ImVec2(x, y), ImVec2(w, h), hov)) g_sub = i;
+            const bool act = (g_sub == i);
+            const float aa = Anim(ImGui::GetID(id), act ? 1.f : 0.f, 12.f);
+            if (aa > 0.01f) RectF(ImVec2(x, y), ImVec2(x + w, y + h), U32(WithA(g_accent, 0.12f)), S(6.f));
+            const ImVec4 tc = Lerp4(hov ? TEXT : DIM, g_accent, aa);
+            Text(ImVec2(x + S(12.f), y + (h - TH()) * 0.5f), U32(tc), tabs[i]);
+            y += h + S(2.f);
+        }
+    }
+
+    void PageTitle(float x, float y, const char* t)
+    {
+        ImGui::PushFont(ImGui::GetFont());
+        Text(ImVec2(x, y), U32(g_accent), t);
+        ImGui::PopFont();
+    }
+
+    // A control row inside a card: label left, control positioned on the right half.
+    // Returns the y for the next row.
+    float RowToggle(const char* lbl, float x, float y, float w, bool* v)
+    {
+        Label(x, y + S(3.f), lbl, U32(TEXT));
+        char id[64]; std::snprintf(id, sizeof(id), "##t_%s", lbl);
+        Toggle(id, x + w - S(38.f), y, v);
+        return y + S(30.f);
+    }
+    float RowSlider(const char* lbl, float x, float y, float w, float* v, float mn, float mx, const char* fmt, bool isInt = false)
+    {
+        Label(x, y, lbl, U32(DIM));
+        char id[64]; std::snprintf(id, sizeof(id), "##s_%s", lbl);
+        const float tw = w * 0.42f;
+        Slider(id, x + w - tw - S(50.f), y, tw, v, mn, mx, fmt, isInt);
+        return y + S(28.f);
+    }
+    float RowSliderI(const char* lbl, float x, float y, float w, int* v, int mn, int mx, const char* fmt)
+    {
+        float f = (float)*v; float ny = RowSlider(lbl, x, y, w, &f, (float)mn, (float)mx, fmt, true); *v = (int)(f + 0.5f); return ny;
+    }
+    float RowCombo(const char* lbl, float x, float y, float w, int* v, const char* const* items, int n)
+    {
+        Label(x, y + S(4.f), lbl, U32(DIM));
+        char id[64]; std::snprintf(id, sizeof(id), "##c_%s", lbl);
+        const float cw = w * 0.5f;
+        Combo(id, x + w - cw, y, cw, v, items, n);
+        return y + S(34.f);
+    }
+    float RowKey(const char* lbl, float x, float y, float w, int* v)
+    {
+        Label(x, y + S(4.f), lbl, U32(TEXT));
+        char id[64]; std::snprintf(id, sizeof(id), "##k_%s", lbl);
+        Keybind(id, x + w - S(90.f), y, S(90.f), v);
+        return y + S(34.f);
+    }
+
+    // Small color swatch. `col` is float[4] RGBA (0..1). Clicking opens an
+    // ImGui color-picker popup (with alpha). Draw-only; positions itself.
+    void ColorSwatch(const char* id, float x, float y, float* col)
+    {
+        const float sw = S(26.f), sh = S(16.f);
+        const float sYtop = y + S(2.f);
+        // checker under the swatch so alpha is readable
+        RectF(ImVec2(x, sYtop), ImVec2(x + sw, sYtop + sh), U32(RGBA(60, 60, 66)), S(4.f));
+        RectF(ImVec2(x, sYtop), ImVec2(x + sw, sYtop + sh),
+              ImGui::ColorConvertFloat4ToU32(ImVec4(col[0], col[1], col[2], col[3])), S(4.f));
+        Rect(ImVec2(x, sYtop), ImVec2(x + sw, sYtop + sh), U32(BORDER), S(4.f));
+
+        bool hov = false;
+        if (Hit(id, ImVec2(x, y), ImVec2(sw, sh + S(4.f)), hov))
+            ImGui::OpenPopup(id);
+
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, U32(BG1));
+        ImGui::PushStyleColor(ImGuiCol_Border, U32(BORDER));
+        ImGui::PushStyleColor(ImGuiCol_Text, U32(TEXT));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, U32(FRAME));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, U32(WithA(g_accent, 0.25f)));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, U32(WithA(g_accent, 0.35f)));
+        if (ImGui::BeginPopup(id))
+        {
+            ImGui::ColorPicker4("##pick", col,
+                ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_NoSidePreview |
+                ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV);
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleColor(6);
+    }
+
+    // Standalone color row: label left, swatch at the right edge.
+    float RowColor(const char* lbl, float x, float y, float w, float* col)
+    {
+        Label(x, y + S(3.f), lbl, U32(TEXT));
+        char id[80]; std::snprintf(id, sizeof(id), "##csw_%s", lbl);
+        ColorSwatch(id, x + w - S(26.f), y, col);
+        return y + S(30.f);
+    }
+
+    // Toggle row with a color swatch just left of the toggle.
+    float RowToggleC(const char* lbl, float x, float y, float w, bool* v, float* col)
+    {
+        Label(x, y + S(3.f), lbl, U32(TEXT));
+        char cid[80]; std::snprintf(cid, sizeof(cid), "##csw_%s", lbl);
+        ColorSwatch(cid, x + w - S(38.f) - S(34.f), y, col);
+        char id[64]; std::snprintf(id, sizeof(id), "##t_%s", lbl);
+        Toggle(id, x + w - S(38.f), y, v);
+        return y + S(30.f);
+    }
+
+    // Styled single-line text box (ImGui InputText as the editor). Returns true
+    // when the text changed this frame. Positions itself at (x,y).
+    bool TextInput(const char* id, float x, float y, float w, char* buf, size_t bufsz, const char* hint)
+    {
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, FRAME);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, WithA(g_accent, 0.15f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, WithA(g_accent, 0.20f));
+        ImGui::PushStyleColor(ImGuiCol_Text, TEXT);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, S(5.f));
+        ImGui::SetCursorScreenPos(ImVec2(x, y));
+        ImGui::SetNextItemWidth(w);
+        const bool changed = ImGui::InputTextWithHint(id, hint, buf, bufsz);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(4);
+        return changed;
+    }
+
+    // Vertical scroll region: clips to (x,y,w,h) and applies a wheel-driven
+    // offset (stored by the caller). Returns the y-origin to draw the first row
+    // at (already shifted by -*scroll); the caller draws rows and must skip any
+    // that fall outside [y, y+h] for correct clipping and hit-testing.
+    float BeginScroll(float x, float y, float w, float h, float* scroll, float contentH)
+    {
+        const ImVec2 mn(x, y), mx(x + w, y + h);
+        const float maxS = contentH > h ? contentH - h : 0.f;
+        if (ImGui::IsMouseHoveringRect(mn, mx))
+        {
+            const float wheel = ImGui::GetIO().MouseWheel;
+            if (wheel != 0.f) *scroll -= wheel * S(48.f);
+        }
+        if (*scroll < 0.f) *scroll = 0.f;
+        if (*scroll > maxS) *scroll = maxS;
+        ImGui::PushClipRect(mn, mx, true);
+        // subtle scrollbar
+        if (maxS > 0.f)
+        {
+            const float trackX = x + w - S(4.f);
+            RectF(ImVec2(trackX, y), ImVec2(trackX + S(3.f), y + h), U32(WithA(FRAME, 0.6f)), S(2.f));
+            const float thumbH = h * (h / contentH);
+            const float thumbY = y + (h - thumbH) * (*scroll / maxS);
+            RectF(ImVec2(trackX, thumbY), ImVec2(trackX + S(3.f), thumbY + thumbH), U32(WithA(g_accent, 0.7f)), S(2.f));
+        }
+        return y - *scroll;
+    }
+    void EndScroll() { ImGui::PopClipRect(); }
+
+    // ---- Anatomical human hitbox: SVG silhouette texture + rect hit regions ----
+    // Embedded fallback silhouette (used if the on-disk .svg is unavailable).
+    const char* kHumanSvg = R"SVG(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 430" width="200" height="430">
+<g fill="#1f2024" stroke="#c2701c" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
+<ellipse cx="100" cy="36" rx="24" ry="28"/>
+<path d="M89,58 h22 v16 q-11,6 -22,0 z"/>
+<path d="M54,86 C74,74 126,74 146,86 L136,172 C126,198 74,198 64,172 Z"/>
+<path d="M68,176 L132,176 L126,252 C126,266 74,266 74,252 Z"/>
+<path d="M62,88 C48,94 41,116 40,148 L56,150 C58,122 63,100 72,94 Z"/>
+<path d="M138,88 C152,94 159,116 160,148 L144,150 C142,122 137,100 128,94 Z"/>
+<path d="M40,146 C39,174 40,204 44,230 L58,228 C55,200 55,172 55,148 Z"/>
+<path d="M160,146 C161,174 160,204 156,230 L142,228 C145,200 145,172 145,148 Z"/>
+<ellipse cx="50" cy="238" rx="9" ry="12"/>
+<ellipse cx="150" cy="238" rx="9" ry="12"/>
+<path d="M76,252 C70,284 70,318 76,350 L97,348 C99,310 100,278 99,256 Z"/>
+<path d="M124,252 C130,284 130,318 124,350 L103,348 C101,310 100,278 101,256 Z"/>
+<path d="M78,348 C80,378 82,404 86,422 L100,420 C98,392 98,364 96,346 Z"/>
+<path d="M122,348 C120,378 118,404 114,422 L100,420 C102,392 102,364 104,346 Z"/>
+<path d="M84,418 L100,418 L100,428 L79,428 q-2,-6 5,-10 z"/>
+<path d="M116,418 L100,418 L100,428 L121,428 q2,-6 -5,-10 z"/>
+</g>
+<g stroke="#c2701c" stroke-width="1" stroke-opacity="0.45" fill="none" stroke-linecap="round">
+<line x1="100" y1="80" x2="100" y2="250"/>
+<line x1="70" y1="120" x2="130" y2="120"/>
+<line x1="74" y1="172" x2="126" y2="172"/>
+<line x1="74" y1="214" x2="126" y2="214"/>
+</g>
+</svg>)SVG";
+
+    void DrawHumanHitbox(float ox, float oy, float bw, float bh, int* sel)
+    {
+        ImDrawList* d = DL();
+
+        // load the silhouette texture once: prefer the live file, else embedded.
+        static void* tex = nullptr; static int tw = 0, th = 0; static bool tried = false;
+        if (!tried)
+        {
+            tex = Icons::LoadSvgFile("C:\\Dev\\CS2\\TempleWare-CS2-1.1.5\\TempleWare-CS2\\human_hitbox_tactical.svg", 430, &tw, &th);
+            if (!tex) tex = Icons::RasterSvgData("humanhb", kHumanSvg, 430, &tw, &th);
+            tried = true;
+        }
+
+        // body rect: fill the box height, preserve aspect, centre horizontally.
+        const float aspect = (th > 0) ? (float)tw / (float)th : 0.47f;
+        const float dw = bh * aspect;
+        const float dx = ox + (bw - dw) * 0.5f;
+        const ImVec2 a(dx, oy), b(dx + dw, oy + bh);
+
+        if (tex) d->AddImage((ImTextureID)tex, a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE);
+        else { RectF(a, b, U32(RGBA(31, 32, 36, 220)), S(6.f)); Rect(a, b, U32(WithA(g_accent, 0.4f)), S(6.f)); }
+
+        // normalized rect hit regions (relative to the drawn body rect).
+        struct R { int reg; float x, y, w, h; };
+        static const R regs[] = {
+            { 0, 0.38f, 0.02f, 0.24f, 0.14f },  // head
+            { 1, 0.43f, 0.15f, 0.14f, 0.06f },  // neck
+            { 2, 0.28f, 0.20f, 0.44f, 0.20f },  // chest
+            { 3, 0.33f, 0.40f, 0.34f, 0.14f },  // stomach
+            { 4, 0.33f, 0.54f, 0.34f, 0.14f },  // pelvis
+            { 5, 0.14f, 0.19f, 0.20f, 0.40f },  // left arm
+            { 6, 0.66f, 0.19f, 0.20f, 0.40f },  // right arm
+            { 7, 0.34f, 0.58f, 0.16f, 0.42f },  // left leg
+            { 8, 0.50f, 0.58f, 0.16f, 0.42f },  // right leg
+        };
+        const int N = 9;
+        auto RS = [&](const R& r) { return ImVec4(dx + r.x * dw, oy + r.y * bh, dx + (r.x + r.w) * dw, oy + (r.y + r.h) * bh); };
+
+        bool hovBox = false;
+        Hit("##humanhb", ImVec2(ox, oy), ImVec2(bw, bh), hovBox);
+        const bool clicked = ImGui::IsItemClicked();
+        const ImVec2 mp = ImGui::GetIO().MousePos;
+
+        // hover: priority head, neck, arms, chest, stomach, pelvis, legs.
+        const int prio[] = { 0, 1, 5, 6, 2, 3, 4, 7, 8 };
+        int hovReg = -1;
+        if (hovBox)
+            for (int i = 0; i < N; ++i)
+            {
+                const R& r = regs[prio[i]]; const ImVec4 s = RS(r);
+                if (mp.x >= s.x && mp.x <= s.z && mp.y >= s.y && mp.y <= s.w) { hovReg = r.reg; break; }
+            }
+        if (clicked && hovReg >= 0) *sel = hovReg;
+
+        // overlays: only the selected + hovered region (texture stays visible).
+        for (int i = 0; i < N; ++i)
+        {
+            const R& r = regs[i]; const ImVec4 s = RS(r);
+            const bool seld = (*sel == r.reg);
+            const bool hov = (hovReg == r.reg);
+            if (!seld && !hov) continue;
+            const ImU32 fill = seld ? U32(WithA(g_accent, 0.30f)) : U32(WithA(g_accent, 0.15f));
+            RectF(ImVec2(s.x, s.y), ImVec2(s.z, s.w), fill, S(3.f));
+            if (seld) Rect(ImVec2(s.x, s.y), ImVec2(s.z, s.w), U32(WithA(g_accent, 0.85f)), S(3.f), S(1.3f));
+        }
+
+        // selected region name under the figure.
+        const char* names[] = { "HEAD","NECK","CHEST","STOMACH","PELVIS","L.ARM","R.ARM","L.LEG","R.LEG" };
+        if (*sel >= 0 && *sel < 9)
+        {
+            const char* nm = names[*sel];
+            Text(ImVec2(ox + (bw - TW(nm)) * 0.5f, oy + bh + S(2.f)), U32(g_accent), nm);
+        }
+    }
+
+    // Fake-yaw radar (Anti-Aim card): a circle with a highlighted cone + a
+    // secondary "real" indicator to the side.
+    void FakeYawGraphic(float cx, float cy, float r, const ImVec4& col)
+    {
+        ImDrawList* d = DL();
+        d->AddCircle(ImVec2(cx, cy), r, U32(WithA(col, 0.5f)), 40, S(1.4f));
+        // cone (down-facing, ~60deg)
+        const float a0 = 1.05f, a1 = 2.09f;
+        d->PathLineTo(ImVec2(cx, cy));
+        for (float a = a0; a <= a1; a += 0.1f) d->PathLineTo(ImVec2(cx + cosf(a) * r, cy + sinf(a) * r));
+        d->PathFillConvex(U32(WithA(col, 0.30f)));
+        d->AddLine(ImVec2(cx, cy), ImVec2(cx, cy - r), U32(col), S(2.f));
+        d->AddCircleFilled(ImVec2(cx, cy), S(3.f), U32(col));
+        // secondary indicator
+        d->AddCircle(ImVec2(cx + r * 2.1f, cy), r * 0.75f, U32(WithA(DIM, 0.7f)), 32, S(1.2f));
+        d->AddCircleFilled(ImVec2(cx + r * 2.1f, cy), S(2.5f), U32(DIM));
+        d->AddLine(ImVec2(cx + r * 1.15f, cy), ImVec2(cx + r * 1.55f, cy), U32(DIM), S(1.2f));
+    }
+
+    // Bottom keybinds overview strip.
+    void KeybindsStrip(float x, float y, float w)
+    {
+        BeginCard("KEYBINDS OVERVIEW", x, y, w, 5);
+        struct KB { const char* name; int* key; };
+        static int menuKey = 0x2D; // INSERT (display only)
+        KB items[] = {
+            { "Aimbot", &Esp::g_aimbot.aimKey }, { "Triggerbot", &Esp::g_trigger.key },
+            { "Bhop", &Esp::g_movement.bhopKey }, { "Fake Duck", &Esp::g_movement.fakeDuckKey },
+            { "Slow Walk", &Esp::g_movement.slowWalkKey }, { "Menu", &menuKey },
+        };
+        const float rowY = y + S(50.f);
+        const float cellW = (w - S(32.f)) / 6.f;
+        for (int i = 0; i < 6; ++i)
+        {
+            const float cx = x + S(16.f) + i * cellW;
+            Label(cx, rowY, items[i].name, U32(DIM));
+            char id[24]; std::snprintf(id, sizeof(id), "##kbo%d", i);
+            Keybind(id, cx, rowY + S(20.f), cellW - S(16.f), items[i].key);
+        }
+        EndCard(rowY + S(50.f));
+    }
+
+    // ---------------- AIMBOT ----------------
+    void PageAimbot(float x, float y, float w, float h)
+    {
+        auto& a = Esp::g_aimbot;
+        PageTitle(x, y, "AIMBOT");
+        Text(ImVec2(x + S(30.f), y + S(22.f)), U32(DIM), "Legit aim assistance.");
+
+        const float bodyY = y + S(58.f);
+        const float gap = S(16.f);
+        const float colW = (w - gap * 2.f) / 3.f;
+        const float c1 = x, c2 = c1 + colW + gap, c3 = c2 + colW + gap;
+
+        // ACTIVATION (wired: Enable, Aim Key, Aim Type)
+        {
+            BeginCard("ACTIVATION", c1, bodyY, colW, 0);
+            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+            ry = RowToggle("Enable", ix, ry, iw, &a.enable);
+            ry = RowKey("Aim Key", ix, ry, iw, &a.aimKey);
+            { const char* t[] = { "Hold","Toggle","Always" }; ry = RowCombo("Aim Type", ix, ry, iw, &a.aimType, t, 3); }
+            // TODO (not wired yet): Fire Key, Silent Aim
+            EndCard(ry);
+        }
+        // TARGETING (wired: FOV, Smooth)
+        {
+            BeginCard("TARGETING", c2, bodyY, colW, 1);
+            float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
+            ry = RowSlider("FOV", ix, ry, iw, &a.fov, 0.f, 30.f, "%.1f");
+            ry = RowToggleC("Draw FOV", ix, ry, iw, &a.drawFov, a.fovColor);
+            ry = RowSlider("Smooth", ix, ry, iw, &a.smooth, 0.f, 1.f, "%.2f");
+            // TODO (not wired yet): Selection, Minimum Damage, Hit Chance, Multipoint
+            EndCard(ry);
+        }
+        // HITBOX (wired: clickable hitbox selection)
+        {
+            const float cardH = S(250.f);
+            BeginCard("HITBOX", c3, bodyY, colW, 3);
+            // TODO (not wired yet): Hitbox Scale, Safe Points, Prefer Body Aim
+            const float bodyH = cardH * 0.82f;
+            const float bodyW = bodyH * 0.55f;
+            DrawHumanHitbox(c3 + (colW - bodyW) * 0.5f, bodyY + (cardH - bodyH) * 0.5f, bodyW, bodyH, &a.hitbox);
+            EndCard(bodyY + cardH - S(14.f));
+        }
+
+        // ACCURACY / RCS (wired: Recoil Control System, RCS X, RCS Y)
+        const float row2 = bodyY + S(266.f);
+        {
+            BeginCard("ACCURACY / RCS", c1, row2, colW, 2);
+            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+            ry = RowToggle("Recoil Control System", ix, ry, iw, &a.rcs);
+            ry = RowSliderI("RCS X", ix, ry, iw, &a.rcsX, 0, 100, "%d%%");
+            ry = RowSliderI("RCS Y", ix, ry, iw, &a.rcsY, 0, 100, "%d%%");
+            // TODO (not wired yet): Standalone RCS, Spread Limit, Automatic Stop
+            EndCard(ry);
+        }
+        // TRIGGERBOT (wired: Enable, Team Check, Delay; key is in Keybinds)
+        {
+            auto& t = Esp::g_trigger;
+            BeginCard("TRIGGERBOT", c2, row2, colW, 1);
+            float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
+            ry = RowToggle("Enable##trig", ix, ry, iw, &t.enable);
+            ry = RowToggle("Team Check", ix, ry, iw, &t.teamCheck);
+            ry = RowSliderI("Delay (ms)", ix, ry, iw, &t.delayMs, 0, 250, "%d");
+            EndCard(ry);
+        }
+
+        // TODO (not wired yet): ANTI-AIM card.
+
+        // Keybinds Overview strip (full width, bottom)
+        KeybindsStrip(x, row2 + S(160.f), w);
+    }
+
+    // ---------------- VISUALS (our real ESP/chams/glow) ----------------
+    void PageVisuals(float x, float y, float w, float h)
+    {
+        auto& c = Esp::g_config;
+        PageTitle(x, y, "VISUALS");
+        const float bodyY = y + S(30.f);
+        const char* subs[] = { "Player","Chams","World","Misc" };
+        float sy = bodyY + S(6.f);
+        SubTabs(x, sy, subs, 4);
+        const float gx = x + S(140.f), gw = w - S(140.f), gap = S(16.f);
+        const float colW = (gw - gap) * 0.5f, c1 = gx, c2 = gx + colW + gap;
+
+        if (g_sub == 0) // Player
+        {
+            BeginCard("Box & Skeleton", c1, bodyY, colW);
+            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+            ry = RowToggleC("Box", ix, ry, iw, &c.box, c.boxColor);
+            { const char* t[] = { "Full","Corner","3D" }; ry = RowCombo("Box type", ix, ry, iw, &c.boxType, t, 3); }
+            ry = RowSlider("Thickness", ix, ry, iw, &c.boxThickness, 0.5f, 4.f, "%.1f");
+            ry = RowToggle("Visibility color", ix, ry, iw, &c.visColor);
+            if (c.visColor)
+            {
+                ry = RowColor("  Visible", ix, ry, iw, c.visibleColor);
+                ry = RowColor("  Occluded", ix, ry, iw, c.occludedColor);
+                ry = RowToggle("Real LOS", ix, ry, iw, &c.realVis);
+            }
+            ry = RowToggle("Filled", ix, ry, iw, &c.boxFill);
+            ry = RowToggleC("Skeleton", ix, ry, iw, &c.skeleton, c.skeletonColor);
+            EndCard(ry);
+
+            BeginCard("Info", c2, bodyY, colW);
+            float ry2 = CardBodyY(); const float ix2 = c2 + S(16.f), iw2 = colW - S(32.f);
+            ry2 = RowToggle("Name", ix2, ry2, iw2, &c.name);
+            ry2 = RowToggle("Health bar", ix2, ry2, iw2, &c.healthBar);
+            ry2 = RowToggle("Armor bar", ix2, ry2, iw2, &c.showArmor);
+            ry2 = RowToggleC("Ammo bar", ix2, ry2, iw2, &c.ammoBar, c.ammoColor);
+            ry2 = RowToggle("Weapon", ix2, ry2, iw2, &c.weapon);
+            { const char* t[] = { "Text","Icon","Both" }; ry2 = RowCombo("W.display", ix2, ry2, iw2, &c.weaponDisplay, t, 3); }
+            ry2 = RowToggle("Flags", ix2, ry2, iw2, &c.flags);
+            ry2 = RowToggle("Ping", ix2, ry2, iw2, &c.showPing);
+            ry2 = RowToggle("Distance", ix2, ry2, iw2, &c.distance);
+            EndCard(ry2);
+        }
+        else if (g_sub == 1) // Chams
+        {
+            BeginCard("Glow", c1, bodyY, colW);
+            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+            ry = RowToggleC("Enemy glow", ix, ry, iw, &c.glow, c.glowColor);
+            ry = RowToggleC("Team glow", ix, ry, iw, &c.glowTeam, c.glowTeamColor);
+            ry = RowToggleC("Local glow", ix, ry, iw, &c.glowLocal, c.glowLocalColor);
+            EndCard(ry);
+
+            BeginCard("Chams", c2, bodyY, colW);
+            float ry2 = CardBodyY(); const float ix2 = c2 + S(16.f), iw2 = colW - S(32.f);
+            { const char* t[] = { "Flat","Illuminate","Glow","Matte","Outline","Hologram","Metallic","Liquid","Bloom","Distortion","Pearl" }; ry2 = RowCombo("Material", ix2, ry2, iw2, &c.chamsType, t, 11); }
+            ry2 = RowToggleC("Enemy visible", ix2, ry2, iw2, &c.chams, c.chamsColor);
+            ry2 = RowToggleC("Enemy XQZ", ix2, ry2, iw2, &c.chamsXqz, c.chamsXqzColor);
+            ry2 = RowToggleC("Team", ix2, ry2, iw2, &c.chamsTeam, c.chamsTeamColor);
+            ry2 = RowToggleC("Local", ix2, ry2, iw2, &c.chamsLocal, c.chamsLocalColor);
+            ry2 = RowToggleC("Ragdoll", ix2, ry2, iw2, &c.ragdollChams, c.ragdollChamsColor);
+            EndCard(ry2);
+        }
+        else if (g_sub == 2) // World
+        {
+            BeginCard("Extras", c1, bodyY, colW);
+            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+            ry = RowToggleC("Head circle", ix, ry, iw, &c.headCircle, c.headCircleColor);
+            ry = RowToggleC("Snapline", ix, ry, iw, &c.snapline, c.snaplineColor);
+            ry = RowToggleC("Off-screen arrows", ix, ry, iw, &c.offArrows, c.offArrowColor);
+            ry = RowToggleC("Sound ESP", ix, ry, iw, &c.soundEsp, c.soundColor);
+            ry = RowToggle("Team ESP", ix, ry, iw, &c.teamEsp);
+            EndCard(ry);
+        }
+        else // Misc
+        {
+            BeginCard("Master", c1, bodyY, colW);
+            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+            ry = RowToggle("ESP enabled", ix, ry, iw, &c.enabled);
+            EndCard(ry);
+        }
+    }
+
+    // ---------------- WORLD ----------------
+    void PageWorld(float x, float y, float w, float h)
+    {
+        auto& c = Esp::g_config;
+        PageTitle(x, y, "WORLD");
+        const float bodyY = y + S(30.f);
+        const float gx = x + S(20.f), gw = w - S(20.f), gap = S(16.f);
+        const float colW = (gw - gap) * 0.5f, c1 = gx, c2 = gx + colW + gap;
+
+        BeginCard("Bomb & Grenades", c1, bodyY, colW);
+        float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+        ry = RowToggleC("Bomb ESP", ix, ry, iw, &c.bombEsp, c.bombColor);
+        ry = RowToggleC("Grenade ESP", ix, ry, iw, &c.nadeEsp, c.nadeColor);
+        ry = RowToggle("Grenade trajectory", ix, ry, iw, &c.nadeTrajectory);
+        ry = RowToggleC("Throw predictor", ix, ry, iw, &c.nadeThrow, c.nadeThrowColor);
+        ry = RowToggleC("Inferno fill", ix, ry, iw, &c.infernoFill, c.infernoColor);
+        ry = RowToggleC("Spectator list", ix, ry, iw, &c.specList, c.specColor);
+        ry = RowToggleC("Ragdoll ESP", ix, ry, iw, &c.ragdollEsp, c.ragdollColor);
+        EndCard(ry);
+
+        BeginCard("Item ESP", c2, bodyY, colW);
+        float ry2 = CardBodyY(); const float ix2 = c2 + S(16.f), iw2 = colW - S(32.f);
+        ry2 = RowToggleC("Item names", ix2, ry2, iw2, &c.itemEsp, c.itemColor);
+        ry2 = RowToggle("Item icons", ix2, ry2, iw2, &c.itemIcon);
+        ry2 = RowToggleC("Item glow", ix2, ry2, iw2, &c.itemGlow, c.itemGlowColor);
+        ry2 = RowToggleC("Item chams", ix2, ry2, iw2, &c.itemChams, c.itemChamsColor);
+        EndCard(ry2);
+    }
+
+    // ---------------- MISC ----------------
+    void PageMisc(float x, float y, float w, float h)
+    {
+        auto& c = Esp::g_config;
+        PageTitle(x, y, "MISC");
+        Text(ImVec2(x + S(30.f), y + S(22.f)), U32(DIM), "Quality-of-life tweaks.");
+        const float bodyY = y + S(58.f);
+        const float gap = S(16.f);
+        const float colW = (w - gap * 2.f) / 3.f;
+        const float c1 = x;
+        const float c2 = x + colW + gap;
+        const float c3 = x + (colW + gap) * 2.f;
+
+        BeginCard("VISUALS", c1, bodyY, colW, 3);
+        float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+        ry = RowToggle("Anti-flash", ix, ry, iw, &c.antiFlash);
+        ry = RowToggle("FOV changer", ix, ry, iw, &c.fovChanger);
+        if (c.fovChanger) ry = RowSliderI("FOV", ix, ry, iw, &c.fovValue, 60, 160, "%d");
+        ry = RowToggle("Local opacity", ix, ry, iw, &c.localOpacity);
+        if (c.localOpacity)
+        {
+            ry = RowSlider("Opacity", ix, ry, iw, &c.localOpacityVal, 0.f, 1.f, "%.2f");
+            ry = RowToggle("Only scoped", ix, ry, iw, &c.localOnlyScoped);
+        }
+        EndCard(ry);
+
+        BeginCard("VELOCITY BAR", c2, bodyY, colW, 2);
+        float ry2 = CardBodyY(); const float ix2 = c2 + S(16.f), iw2 = colW - S(32.f);
+        ry2 = RowToggle("Enable##vel", ix2, ry2, iw2, &c.velBar);
+        if (c.velBar)
+        {
+            { const char* t[] = { "Bottom","Top" }; ry2 = RowCombo("Position", ix2, ry2, iw2, &c.velBarPos, t, 2); }
+            ry2 = RowToggleC("Gradient", ix2, ry2, iw2, &c.velGradient, c.velColor);
+            if (c.velGradient) ry2 = RowColor("  High-speed color", ix2, ry2, iw2, c.velColor2);
+            else               ry2 = RowColor("  Bar color", ix2, ry2, iw2, c.velColor);
+            ry2 = RowToggle("Glow", ix2, ry2, iw2, &c.velGlow);
+            ry2 = RowToggle("Show speed", ix2, ry2, iw2, &c.velText);
+            ry2 = RowSliderI("Max speed", ix2, ry2, iw2, &c.velMax, 100, 1000, "%d");
+        }
+        ry2 = RowToggle("Speed graph", ix2, ry2, iw2, &c.velGraph);
+        EndCard(ry2);
+
+        BeginCard("HUD", c3, bodyY, colW, 5);
+        float ry3 = CardBodyY(); const float ix3 = c3 + S(16.f), iw3 = colW - S(32.f);
+        ry3 = RowToggleC("Watermark", ix3, ry3, iw3, &c.watermark, c.watermarkColor);
+        ry3 = RowToggleC("Hit marker", ix3, ry3, iw3, &c.hitMarker, c.hitMarkerColor);
+        ry3 = RowToggleC("Damage numbers", ix3, ry3, iw3, &c.damageNumbers, c.damageColor);
+        ry3 = RowToggleC("Bullet tracer", ix3, ry3, iw3, &c.bulletTracer, c.tracerColor);
+        ry3 = RowToggleC("Crosshair", ix3, ry3, iw3, &c.crosshair, c.crosshairColor);
+        if (c.crosshair)
+        {
+            ry3 = RowToggle("  Center dot", ix3, ry3, iw3, &c.crosshairDot);
+            ry3 = RowSlider("  Size", ix3, ry3, iw3, &c.crosshairSize, 1.f, 20.f, "%.0f");
+            ry3 = RowSlider("  Gap", ix3, ry3, iw3, &c.crosshairGap, 0.f, 12.f, "%.0f");
+            ry3 = RowSlider("  Thickness", ix3, ry3, iw3, &c.crosshairThickness, 1.f, 4.f, "%.1f");
+        }
+        EndCard(ry3);
+    }
+
+    // ---------------- INVENTORY (SKINS) ----------------
+    void PageInventory(float x, float y, float w, float h)
+    {
+        PageTitle(x, y, "INVENTORY");
+        Text(ImVec2(x + S(30.f), y + S(22.f)), U32(DIM), "Knife / glove / weapon skin changer (nerv engine).");
+
+        const float bodyY = y + S(48.f);
+        ImGui::SetCursorScreenPos(ImVec2(x, bodyY));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, U32(CARD));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, U32(FRAME));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, U32(WithA(g_accent, 0.25f)));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, U32(WithA(g_accent, 0.35f)));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, U32(g_accent));
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, U32(g_accent));
+        ImGui::PushStyleColor(ImGuiCol_Button, U32(FRAME));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, U32(WithA(g_accent, 0.35f)));
+        ImGui::PushStyleColor(ImGuiCol_Header, U32(WithA(g_accent, 0.25f)));
+        ImGui::PushStyleColor(ImGuiCol_Text, U32(TEXT));
+        ImGui::BeginChild("##nerv_skins", ImVec2(w, h - S(48.f)), true);
+        ImGui::PushItemWidth(S(260.f));
+        nerv_bridge::draw_skins_ui();
+        ImGui::PopItemWidth();
+        ImGui::EndChild();
+        ImGui::PopStyleColor(10);
+    }
+
+    // ---------------- CONFIGS ----------------
+    void PageConfigs(float x, float y, float w, float h)
+    {
+        PageTitle(x, y, "CONFIGS");
+        Text(ImVec2(x + S(30.f), y + S(22.f)), U32(DIM), "Save and load your settings.");
+
+        static char  nameBuf[64] = "";
+        static std::vector<std::string> list = gui_config::List();
+        static int   sel = -1;
+        static char  msg[96] = "";
+        static float msgT = 0.f;
+        static ImVec4 msgCol = GREEN;
+        auto notify = [&](const char* m, ImVec4 c) { std::snprintf(msg, sizeof(msg), "%s", m); msgCol = c; msgT = 2.5f; };
+        const ImVec4 BAD = RGBA(230, 120, 120);
+
+        const float bodyY = y + S(58.f);
+        const float gap = S(16.f);
+        const float leftW = w * 0.52f - gap * 0.5f;
+        const float rightW = w - leftW - gap;
+
+        // ---- left: manage ----
+        BeginCard("MANAGE", x, bodyY, leftW);
+        float ry = CardBodyY();
+        const float ix = x + S(16.f), iw = leftW - S(32.f);
+
+        Label(ix, ry, "Config name", U32(DIM));
+        ry += S(22.f);
+        {
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, FRAME);
+            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, FRAME);
+            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, FRAME);
+            ImGui::PushStyleColor(ImGuiCol_Text, TEXT);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, S(5.f));
+            ImGui::SetCursorScreenPos(ImVec2(ix, ry));
+            ImGui::SetNextItemWidth(iw);
+            ImGui::InputTextWithHint("##cfgname", "e.g. legit", nameBuf, sizeof(nameBuf));
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor(4);
+        }
+        ry += S(40.f);
+
+        const float bw = (iw - gap) * 0.5f, bh = S(30.f);
+        if (Button("##cfgsave", ix, ry, bw, bh, "Save", true))
+        {
+            if (nameBuf[0] && gui_config::Save(nameBuf)) { list = gui_config::List(); notify("Config saved.", GREEN); }
+            else notify(nameBuf[0] ? "Save failed." : "Enter a name first.", BAD);
+        }
+        if (Button("##cfgload", ix + bw + gap, ry, bw, bh, "Load", false))
+        {
+            if (nameBuf[0] && gui_config::Load(nameBuf)) notify("Config loaded.", GREEN);
+            else notify(nameBuf[0] ? "Config not found." : "Enter a name first.", BAD);
+        }
+        ry += bh + S(10.f);
+        if (Button("##cfgdel", ix, ry, bw, bh, "Delete", false))
+        {
+            if (nameBuf[0] && gui_config::Remove(nameBuf)) { list = gui_config::List(); sel = -1; nameBuf[0] = 0; notify("Config deleted.", GREEN); }
+            else notify(nameBuf[0] ? "Config not found." : "Enter a name first.", BAD);
+        }
+        if (Button("##cfgrefresh", ix + bw + gap, ry, bw, bh, "Refresh", false)) { list = gui_config::List(); notify("List refreshed.", DIM); }
+        ry += bh + S(14.f);
+
+        if (msgT > 0.f)
+        {
+            msgT -= ImGui::GetIO().DeltaTime;
+            const float a = msgT > 0.5f ? 1.f : (msgT > 0.f ? msgT / 0.5f : 0.f);
+            Text(ImVec2(ix, ry), U32(WithA(msgCol, a)), msg);
+        }
+        ry += S(22.f);
+        EndCard(ry);
+
+        // ---- right: saved list ----
+        const float rx = x + leftW + gap;
+        BeginCard("SAVED CONFIGS", rx, bodyY, rightW);
+        float ly = CardBodyY();
+        const float lix = rx + S(16.f), liw = rightW - S(32.f);
+        if (list.empty())
+        {
+            Text(ImVec2(lix, ly), U32(DIM), "No saved configs yet.");
+            ly += S(24.f);
+        }
+        else
+        {
+            for (int i = 0; i < static_cast<int>(list.size()); ++i)
+            {
+                const float rh = S(26.f);
+                char id[32]; std::snprintf(id, sizeof(id), "##cfgrow%d", i);
+                bool hov = false;
+                const bool clk = Hit(id, ImVec2(lix, ly), ImVec2(liw, rh), hov);
+                const bool seld = (sel == i);
+                if (seld || hov) RectF(ImVec2(lix, ly), ImVec2(lix + liw, ly + rh), U32(seld ? WithA(g_accent, 0.18f) : FRAME), S(5.f));
+                Text(ImVec2(lix + S(8.f), ly + (rh - TH()) * 0.5f), U32(seld ? g_accent : TEXT), list[i].c_str());
+                if (clk) { sel = i; std::snprintf(nameBuf, sizeof(nameBuf), "%s", list[i].c_str()); }
+                ly += rh + S(4.f);
+            }
+        }
+        EndCard(ly);
+    }
+
+    // ---------------- SETTINGS ----------------
+    void PageSettings(float x, float y, float w, float h)
+    {
+        PageTitle(x, y, "SETTINGS");
+        const float bodyY = y + S(30.f);
+        const float colW = S(360.f), ix = x + S(36.f), iw = colW - S(32.f);
+        BeginCard("Interface", x + S(20.f), bodyY, colW);
+        float ry = CardBodyY();
+        Label(ix, ry, "UI scale", U32(DIM));
+        float sc = g_uiScale; Slider("##uisc", ix + colW - S(32.f) - S(160.f) - S(50.f), ry, S(160.f), &sc, 0.7f, 3.0f, "%.2fx"); g_uiScale = sc;
+        ry += S(34.f);
+        Label(ix, ry + S(4.f), "Center window", U32(TEXT));
+        // simple button
+        {
+            const float bx = ix + colW - S(120.f) - S(16.f), bw = S(120.f), bh = S(26.f);
+            bool bh2 = false;
+            if (Hit("##centerbtn", ImVec2(bx, ry), ImVec2(bw, bh), bh2)) g_needCenter = true;
+            RectF(ImVec2(bx, ry), ImVec2(bx + bw, ry + bh), U32(bh2 ? WithA(g_accent, 0.4f) : FRAME), S(5.f));
+            Text(ImVec2(bx + (bw - TW("Recenter")) * 0.5f, ry + (bh - TH()) * 0.5f), U32(TEXT), "Recenter");
+        }
+        ry += S(40.f);
+        EndCard(ry);
+    }
+
+    void PageSimple(const char* title, float x, float y, float w, float h)
+    {
+        PageTitle(x, y, title ? title : "COMING SOON");
+        Text(ImVec2(x + S(20.f), y + S(50.f)), U32(DIM), "This section is part of the system being built.");
+    }
+}

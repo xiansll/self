@@ -1,0 +1,177 @@
+TempleWare-CS2 için çıkarılan güncel offset / pointer listesi
+(CS2 build 14178 — Antigravity dump, 2026-08-30)
+================================================================
+
+1) SCHEMA FIELD OFFSETS (77 adet)
+   Kaynak: TempleWare-CS2/source/templeware/utils/schema/schema_offsets_table.h
+   Format: hash, offset, Class->Field
+
+CBasePlayerController->m_bIsLocalPlayerController          0x788
+CModelState->m_hModel                                      0xA0
+C_EnvSky->m_vTintColorLightingOnly                         0xFC5
+C_BasePlayerPawn->m_hController                            0x13D0
+CCSPlayerController->m_bPawnIsAlive                        0x91C
+C_EnvSky->m_vTintColor                                     0xFC1
+CBasePlayerController->m_nTickBase                         0x6B8
+C_BaseEntity->m_pGameSceneNode                             0x330
+C_CSPlayerPawn->m_bIsScoped                                0x1C78
+CEntityInstance->m_pEntity                                 0x10
+C_EnvSky->m_flFogMinEnd                                    0xFD8
+CEntityIdentity->m_designerName                            0x20
+C_BaseEntity->m_iTeamNum                                   0x3E7
+C_CSWeaponBase->m_fAccuracyPenalty                         0x17F0
+C_CSWeaponBase->m_iWeaponGameplayAnimState                 0x1778
+CPlayer_MovementServices_Humanoid->m_flSurfaceFriction     0x26C
+C_BasePlayerWeapon->m_nNextPrimaryAttackTick               0x16F0
+C_BaseEntity->m_iMaxHealth                                 0x348
+C_BasePlayerPawn->m_pMovementServices                      0x1248
+C_CSWeaponBase->m_bInspectPending                          0x1784
+C_CSWeaponBaseGun->m_zoomLevel                             0x1CE0
+ViewAngleServerChange_t->qAngle                            0x34
+CPlayer_WeaponServices->m_hMyWeapons                       0x48
+CGameSceneNode->m_vecAbsOrigin                             0xC8
+C_BasePlayerPawn->m_pWeaponServices                        0x1208
+C_EnvSky->m_bStartDisabled                                 0xFC0
+CCSPlayerController->m_sSanitizedPlayerName                0x868
+C_BaseModelEntity->m_vecViewOffset                         0xE78
+C_BaseEntity->m_vecVelocity                                0x430
+C_CSWeaponBase->m_flPostponeFireReadyFrac                  0x1810
+C_EnvSky->m_flBrightnessScale                              0xFCC
+CCSPlayer_WeaponServices->m_flNextAttack                   0xD0
+CGameSceneNode->m_bDormant                                 0x103
+C_CSPlayerPawnBase->m_flFlashDuration                      0x1428
+CEntityIdentity->m_flags                                   0x30
+CCSPlayer_MovementServices->m_flCmdForwardMove             0x1A0
+C_BasePlayerPawn->m_pObserverServices                      0x1220
+CBasePlayerController->m_hPawn                             0x6BC
+C_EnvSky->m_flFogMinStart                                  0xFD4
+C_CSWeaponBase->m_bSilencerOn                              0x1825
+CCSPlayerController->m_hObserverPawn                       0x918
+CGameSceneNode->m_angRotation                              0xB8
+CGameSceneNode->m_vecOrigin                                0x80
+CPlayer_WeaponServices->m_hActiveWeapon                    0x60
+C_CSWeaponBaseGun->m_iBurstShotsRemaining                  0x1CE4
+C_CSWeaponBase->m_flRecoilIndex                            0x1800
+CPlayer_MovementServices->m_nButtonDoublePressed           0x80
+C_EnvSky->m_flFogMaxEnd                                    0xFE0
+CPlayer_MovementServices->m_nQueuedButtonDownMask          0x70
+C_EnvSky->m_nFogType                                       0xFD0
+CPlayer_WeaponServices->m_iAmmo                            0x68
+C_CSWeaponBase->m_bBurstMode                               0x1804
+C_BaseEntity->m_MoveType                                   0x525
+CGameSceneNode->m_pNextSibling                             0x48
+C_EnvSky->m_flFogMaxStart                                  0xFDC
+CGameSceneNode->m_angAbsRotation                           0xD4
+CPlayer_MovementServices->m_flMaxspeed                     0x1AC
+CPlayer_WeaponServices->m_hLastWeapon                      0x64
+C_BaseEntity->m_iHealth                                    0x34C
+C_CSWeaponBase->m_weaponMode                               0x17D8
+C_BasePlayerWeapon->m_iClip1                               0x1700
+CSkeletonInstance->m_nHitboxSet                            0x3FC
+CPlayer_MovementServices->m_nQueuedButtonChangeMask        0x78
+CGameSceneNode->m_pOwner                                   0x30
+C_CSWeaponBase->m_bInReload                                0x1814
+C_EnvSky->m_bEnabled                                       0xFE4
+C_BasePlayerPawn->m_vOldOrigin                             0x13B8
+C_BaseEntity->m_vecAbsVelocity                             0x3F8
+C_BaseEntity->m_fFlags                                     0x3F4
+CSkeletonInstance->m_modelState                            0x140
+CCSPlayerModernJump->m_flLastLandedFrac                    0x24
+CGameSceneNode->m_pChild                                   0x40
+CPlayer_MovementServices->m_nToggleButtonDownMask          0x190
+C_BasePlayerPawn->m_ServerViewAngleChanges                 0x1258
+C_CSWeaponBase->m_nPostponeFireReadyTicks                  0x180C
+C_BaseEntity->m_nSubclassID                                0x380
+CCSPlayer_MovementServices->m_ModernJump                   0x6C8
+
+(Not: Bu 77 field için FNV-1a hash değerleri schema_offsets_table.h içinde,
+hash -> offset tablosu olarak duruyor.)
+
+
+2) HOOK / PATTERN ADRESLERİ (17 adet, hepsi güncel DLL'de MATCH)
+   Kaynak: tools/check_patterns.py çıktısı. Değerler RVA (modül bazına göre).
+
+client.dll:
+  Input (CCSGOInput)          = 0xAC161C   (pattern: 48 8B 0D ? ? ? ? 8B D3 E8 ...)
+  EntitySystem                = 0x9A57AA   (48 8B 0D ? ? ? ? 48 89 7C 24 ? 8B FA C1 EB)
+  oGetWeaponData              = 0x7A6E57
+  ogGetBaseEntity             = 0x9BE990
+  FrameStageNotify            = 0xB25180
+  GetRenderFov                = 0x85DA40
+  LevelInit                   = 0xB4E7E0
+  LevelShutdown               = 0xB4E8E0
+  RenderFlashBangOverlay      = 0x11552C0
+  OnAddEntity                 = 0x9BF9D0
+  OnRemoveEntity              = 0x9C0310
+  GlobalVars                  = 0xB37FD0
+
+scenesystem.dll:
+  DrawArray                   = 0x545D0
+  UpdateAggregateSceneObject  = 0x3B8B0
+  UpdateLightObject           = 0x199590
+
+engine2.dll:
+  g_pPVS                      = 0x23D612
+
+materialsystem2.dll:
+  CreateMaterial              = 0x3AFD0
+
+(Tam pattern byte dizileri: TempleWare-CS2/tools/check_patterns.py içinde.)
+
+
+3) INTERFACE ADLARI + ADRESLERİ (Antigravity interfaces.json)
+   Değerler: ilgili modül içindeki RVA.
+
+engine2.dll:
+  Source2EngineToClient001        = 6366624   (0x612D20)
+  GameResourceServiceClientV001   = 6378592   (0x615560)
+  NetworkClientService_001        = 9491472   (0x90D590)
+  Source2ClientPrediction001 (client.dll) = 37511536
+  GameEventSystemClientV001       = 9498512
+
+client.dll:
+  Source2ClientPrediction001      = 37511536
+
+scenesystem.dll:
+  SceneSystem_002                 = 9508144   (0x911C30)
+
+schemasystem.dll:
+  SchemaSystem_001                = 481072    (0x75730)
+
+materialsystem2.dll:
+  VMaterialSystem2_001            = 1427456   (0x15C800)
+
+inputsystem.dll:
+  InputSystemVersion001           = 285600
+
+particles.dll:
+  ParticleSystemMgr003            = 6286016
+
+tier0.dll:
+  VEngineCvar007                  = 3822832
+
+localize.dll:
+  Localize_001                    = 360704
+
+meshsystem.dll:
+  MeshSystem001                   = 1490400
+
+filesystem_stdio.dll:
+  VFileSystem017                  = 2175936
+
+resourcesystem.dll:
+  ResourceSystem013               = 530048
+
+
+4) TEMPLEWARE'DE YAPILAN KRİTİK DÜZELTMELER (referans)
+  - Interface adları düzeltildi:
+      Source2EngineToClient00  -> Source2EngineToClient001
+      GameResourceServiceClientV00 -> GameResourceServiceClientV001
+  - imgui D3DCompile bağımlılığı kaldırıldı (önceden derlenmiş shader,
+    D3DCOMPILER_47.dll import'u tamamen gitti).
+  - Protobuf full descriptor registration çökmesi: 4 custom-option extension
+    (maximum_size_bytes, network_connection_token, network_connection_detail_token,
+    allowed_from_client) kaldırıldı.
+  - MinHook trampoline'lerine RtlAddFunctionTable ile CET unwind bilgisi eklendi.
+  - DLL /CETCOMPAT ile derlendi.
+  - Schema sistemi runtime traversal yerine statik tabloya geçirildi (yukarıdaki 77 field).
