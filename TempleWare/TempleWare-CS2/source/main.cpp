@@ -106,8 +106,8 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     }
 
     // Present is the proven-safe Phase 3 runtime validation path. Keep the
-    // suspect FrameStageNotify detour disabled while Phase 3B validates local
-    // provider/lifecycle behavior.
+    // suspect FrameStageNotify detour disabled while Phase 3 validates local
+    // provider/lifecycle and resolver health.
     if (foundationInit)
     {
         static bool s_presentDiagnosticLogged = false;
@@ -116,6 +116,8 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         static bool s_controllerOkLogged = false;
         static bool s_pawnChangeLogged = false;
         static bool s_lifecycleOkLogged = false;
+        static bool s_phase3cActiveLogged = false;
+        static bool s_phase3cResolverHealthLogged = false;
         static bool s_wasInGame = false;
         static std::uintptr_t s_lastPawn = 0;
 
@@ -174,6 +176,41 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
                     s_pawnChangeLogged = true;
                 }
                 s_lastPawn = snapshot.pawn;
+            }
+
+            // Phase 3C checkpoint 1: diagnose only the health of the already-
+            // existing SDK resolver addresses. Do not alter signatures, call
+            // arguments, object layouts, or enable deep dereferences here.
+            if (!s_phase3cActiveLogged)
+            {
+                FileLog::Log("[P3C] ACTIVE - SDK RESOLVER HEALTH CHECK");
+                s_phase3cActiveLogged = true;
+            }
+
+            if (!s_phase3cResolverHealthLogged && I::EntitySystem)
+            {
+                void* pawnResolver = I::EntitySystem->diagnostic_local_pawn_resolver();
+                void* controllerResolver = I::EntitySystem->diagnostic_local_controller_resolver();
+                const bool providerAlias = I::GameEntity &&
+                    I::GameEntity->Instance == I::EntitySystem;
+
+                char buf[320];
+                std::snprintf(buf, sizeof(buf),
+                    "[P3C] RESOLVER HEALTH pawn_resolver=%p controller_resolver=%p provider_alias=%d sdk_safe=%d",
+                    pawnResolver,
+                    controllerResolver,
+                    providerAlias ? 1 : 0,
+                    snapshot.sdk_deref_safe ? 1 : 0);
+                FileLog::Log(buf);
+
+                if (!pawnResolver)
+                    FileLog::Log("[P3C] PAWN RESOLVER MISSING");
+                if (!controllerResolver)
+                    FileLog::Log("[P3C] CONTROLLER RESOLVER MISSING");
+                if (pawnResolver && controllerResolver)
+                    FileLog::Log("[P3C] RESOLVERS PRESENT - RESULT/SEMANTICS REMAIN TO VALIDATE");
+
+                s_phase3cResolverHealthLogged = true;
             }
 
             if (snapshot.sdk_deref_safe)
