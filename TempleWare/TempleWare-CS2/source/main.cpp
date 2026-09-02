@@ -12,6 +12,7 @@
 #include "esp/esp.h"
 #include "chams/chams.h"
 #include "gui/gui.h"
+#include "gui/nexus_redesign.h"
 #include "trace/trace.h"
 #include "icons/icons.h"
 #include "nerv/nerv_bridge.h"
@@ -344,7 +345,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     }
     if (g_menuAnim > 0.01f)
     {
-        Gui::Render(g_menuAnim);
+        NexusRedesign::Render(g_menuAnim);
 
         // Registered features get a menu-frame callback without TempleWare
         // knowing or implementing any feature-specific controls.
