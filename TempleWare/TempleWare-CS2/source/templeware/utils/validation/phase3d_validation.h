@@ -25,9 +25,6 @@ struct BasicWrapperProbe {
     DWORD exception_code = 0;
 };
 
-// Keep SEH inside a tiny POD-only leaf helper to avoid MSVC C2712 object-unwind
-// restrictions. The probe calls only existing TempleWare schema accessors whose
-// offsets are explicitly present in the current static schema table.
 inline bool ProbeBasicWrappers(C_CSPlayerPawn* pawn,
                                CCSPlayerController* controller,
                                BasicWrapperProbe* out) {
@@ -61,20 +58,21 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     static std::uintptr_t s_lastPawn = 0;
     static std::uintptr_t s_lastController = 0;
     static unsigned int s_consecutivePasses = 0;
-    static bool s_firstProbeLogged = false;
-    static bool s_missingOffsetsLogged = false;
+    static bool s_pairBlocked = false;
 
     if (s_lastPawn != snapshot.pawn || s_lastController != snapshot.controller) {
         s_lastPawn = snapshot.pawn;
         s_lastController = snapshot.controller;
         s_consecutivePasses = 0;
-        s_firstProbeLogged = false;
-        s_missingOffsetsLogged = false;
+        s_pairBlocked = false;
     }
 
-    // A zero schema offset means the static schema table does not contain the
-    // field. Refuse to interpret object memory in that case instead of treating
-    // offset zero as valid data.
+    // Do not hammer a resolver-proven pair every Present once the same wrapper
+    // interpretation has already failed semantically. A new pair gets one fresh
+    // validation attempt automatically.
+    if (s_pairBlocked)
+        return;
+
     const std::uint32_t healthOffset =
         SchemaFinder::Get(hash_32_fnv1a_const("C_BaseEntity->m_iHealth"));
     const std::uint32_t teamOffset =
@@ -88,14 +86,12 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         localControllerOffset && pawnAliveOffset;
 
     if (!offsetsReady) {
-        if (!s_missingOffsetsLogged) {
-            char buf[384];
-            std::snprintf(buf, sizeof(buf),
-                "[P3D][WRAPPER] BLOCKED - schema offsets health=0x%X team=0x%X local=0x%X alive=0x%X",
-                healthOffset, teamOffset, localControllerOffset, pawnAliveOffset);
-            FileLog::Log(buf);
-            s_missingOffsetsLogged = true;
-        }
+        char buf[448];
+        std::snprintf(buf, sizeof(buf),
+            "[P3D][WRAPPER] BLOCKED - schema coverage incomplete health=0x%X team=0x%X local=0x%X alive=0x%X; sdk_safe remains 0",
+            healthOffset, teamOffset, localControllerOffset, pawnAliveOffset);
+        FileLog::Log(buf);
+        s_pairBlocked = true;
         return;
     }
 
@@ -105,8 +101,6 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         reinterpret_cast<CCSPlayerController*>(snapshot.controller),
         &probe);
 
-    // These are intentionally broad semantic bounds. They are not gameplay
-    // decisions; they only reject obviously nonsensical wrapper interpretation.
     const bool healthSane = probe.health >= 0 && probe.health <= 500;
     const bool teamSane = probe.team <= 5;
     const bool localFlagSane = probe.local_controller;
@@ -115,28 +109,38 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     const bool semanticPass = callOk && probe.exception_code == 0 &&
         healthSane && teamSane && localFlagSane && aliveConsistent;
 
-    if (!s_firstProbeLogged || !semanticPass) {
-        char buf[640];
+    if (!semanticPass) {
+        char buf[768];
         std::snprintf(buf, sizeof(buf),
-            "[P3D][WRAPPER] %s - health=%d team=%u local=%d ctrl_alive=%d health_alive=%d exception=0x%08lX offsets_ready=%d",
-            semanticPass ? "PROBE PASS" : "PROBE FAIL",
+            "[P3D][WRAPPER] BLOCKED - resolver-proven pair is not layout-compatible with current basic schema wrappers health=%d team=%u local=%d ctrl_alive=%d health_ok=%d team_ok=%d local_ok=%d alive_consistent=%d exception=0x%08lX; sdk_safe remains 0",
             probe.health,
             static_cast<unsigned int>(probe.team),
             probe.local_controller ? 1 : 0,
             probe.controller_alive ? 1 : 0,
-            probe.health > 0 ? 1 : 0,
-            probe.exception_code,
-            offsetsReady ? 1 : 0);
+            healthSane ? 1 : 0,
+            teamSane ? 1 : 0,
+            localFlagSane ? 1 : 0,
+            aliveConsistent ? 1 : 0,
+            probe.exception_code);
         FileLog::Log(buf);
-        s_firstProbeLogged = true;
-    }
-
-    if (!semanticPass) {
         s_consecutivePasses = 0;
+        s_pairBlocked = true;
         return;
     }
 
     ++s_consecutivePasses;
+    if (s_consecutivePasses == 1) {
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+            "[P3D][WRAPPER] PROBE PASS - health=%d team=%u local=%d ctrl_alive=%d exception=0x%08lX",
+            probe.health,
+            static_cast<unsigned int>(probe.team),
+            probe.local_controller ? 1 : 0,
+            probe.controller_alive ? 1 : 0,
+            probe.exception_code);
+        FileLog::Log(buf);
+    }
+
     if (s_consecutivePasses < 3)
         return;
 
