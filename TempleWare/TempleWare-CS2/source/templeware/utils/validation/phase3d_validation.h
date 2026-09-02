@@ -2,9 +2,9 @@
 
 // Phase 3D validates only a deliberately small, read-only wrapper surface after
 // P3C has already proven local resolver provenance. It does not traverse scene
-// nodes, skeletons, hitboxes, commands, or mutate runtime state. Class-info
-// probing below reuses TempleWare's existing CEntityInstance vfunc path only as
-// a diagnostic so we can distinguish a stale layout from a wrong object type.
+// nodes, skeletons, hitboxes, commands, or mutate runtime state. Class-info and
+// direct-offset probes below reuse only offsets/resolvers already present in the
+// project so wrapper mechanics can be separated from object/layout semantics.
 
 #include <Windows.h>
 #include <cstdint>
@@ -23,6 +23,16 @@ struct BasicWrapperProbe {
     int max_health = 0;
     int health = 0;
     std::uint8_t team = 0;
+    bool local_controller = false;
+    bool controller_alive = false;
+    DWORD exception_code = 0;
+};
+
+struct DirectOffsetProbe {
+    int max_health = 0;
+    int health = 0;
+    std::uint8_t team = 0;
+    std::uint32_t pawn_handle_raw = 0;
     bool local_controller = false;
     bool controller_alive = false;
     DWORD exception_code = 0;
@@ -80,6 +90,40 @@ inline bool ProbeBasicWrappers(C_CSPlayerPawn* pawn,
     }
 }
 
+// Read the exact same already-resolved project offsets without going through
+// the accessor-local cache. This is diagnostic-only and lets us distinguish a
+// stale/zero wrapper cache from a genuinely incompatible runtime layout.
+inline bool ProbeDirectOffsets(std::uintptr_t pawn,
+                               std::uintptr_t controller,
+                               std::uint32_t maxHealthOffset,
+                               std::uint32_t healthOffset,
+                               std::uint32_t teamOffset,
+                               std::uint32_t controllerPawnOffset,
+                               std::uint32_t localControllerOffset,
+                               std::uint32_t pawnAliveOffset,
+                               DirectOffsetProbe* out) {
+    if (!out)
+        return false;
+
+    out->exception_code = 0;
+    __try {
+        if (!pawn || !controller)
+            return false;
+
+        out->max_health = *reinterpret_cast<const int*>(pawn + maxHealthOffset);
+        out->health = *reinterpret_cast<const int*>(pawn + healthOffset);
+        out->team = *reinterpret_cast<const std::uint8_t*>(pawn + teamOffset);
+        out->pawn_handle_raw = *reinterpret_cast<const std::uint32_t*>(controller + controllerPawnOffset);
+        out->local_controller = *reinterpret_cast<const bool*>(controller + localControllerOffset);
+        out->controller_alive = *reinterpret_cast<const bool*>(controller + pawnAliveOffset);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        out->exception_code = GetExceptionCode();
+        return false;
+    }
+}
+
 // Diagnostic-only pointer-identity check. It reuses TempleWare's already
 // existing controller m_hPawn wrapper and EntitySystem::get_base_entity path.
 // No new offsets, signatures, call arguments, or hooks are introduced here.
@@ -114,9 +158,7 @@ inline bool ProbePointerIdentity(CCSPlayerController* controller,
 
 // Existing-vfunc diagnostic only. This does not enable the deep graph gate and
 // does not trust any field value. If the resolver returns the wrong object type,
-// the reported schema class names should expose that directly. If both names are
-// correct while basic fields are nonsense, the remaining suspect is dump/layout
-// freshness rather than pointer provenance.
+// the reported schema class names should expose that directly.
 inline bool ProbeClassIdentity(C_CSPlayerPawn* pawn,
                                CCSPlayerController* controller,
                                ClassIdentityProbe* out) {
@@ -174,9 +216,6 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         s_offsetsLoggedForPair = false;
     }
 
-    // Do not hammer a resolver-proven pair every Present once the same wrapper
-    // interpretation has already failed semantically. A new pair gets one fresh
-    // validation attempt automatically.
     if (s_pairBlocked)
         return;
 
@@ -248,6 +287,34 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         FileLog::Log(buf);
     }
 
+    DirectOffsetProbe rawProbe{};
+    const bool rawCallOk = ProbeDirectOffsets(
+        snapshot.pawn,
+        snapshot.controller,
+        maxHealthOffset,
+        healthOffset,
+        teamOffset,
+        controllerPawnOffset,
+        localControllerOffset,
+        pawnAliveOffset,
+        &rawProbe);
+
+    {
+        char buf[640];
+        std::snprintf(buf, sizeof(buf),
+            "[P3D][RAW] call_ok=%d max_health=%d health=%d team=%u hPawn=0x%08X hPawn_index=%u local=%d ctrl_alive=%d exception=0x%08lX",
+            rawCallOk ? 1 : 0,
+            rawProbe.max_health,
+            rawProbe.health,
+            static_cast<unsigned int>(rawProbe.team),
+            rawProbe.pawn_handle_raw,
+            rawProbe.pawn_handle_raw & ENT_ENTRY_MASK,
+            rawProbe.local_controller ? 1 : 0,
+            rawProbe.controller_alive ? 1 : 0,
+            rawProbe.exception_code);
+        FileLog::Log(buf);
+    }
+
     PointerIdentityProbe pointerProbe{};
     const bool pointerCallOk = ProbePointerIdentity(
         reinterpret_cast<CCSPlayerController*>(snapshot.controller),
@@ -280,9 +347,6 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     const bool localFlagSane = probe.local_controller;
     const bool aliveConsistent = probe.controller_alive == (probe.health > 0);
 
-    // Pointer/class identity are diagnostic-only. The semantic gate remains
-    // based on wrapper values and never opens just because an auxiliary lookup
-    // or class-info call happens to succeed.
     const bool semanticPass = callOk && probe.exception_code == 0 &&
         maxHealthSane && healthSane && teamSane && localFlagSane &&
         aliveConsistent;
