@@ -18,13 +18,11 @@
 #include "velocity_command_compat.h"
 #include "velocity_data_compat.h"
 #include "velocity_config_compat.h"
+#include "velocity_runtime_compat.h"
 #include "../../trace/trace.h"
 
 namespace VelocityRageCompat {
 
-// Compile-time type bridge for the common, non-behavioural types used by the
-// Velocity combat headers. Ported code should depend on these names first and
-// only then be adapted to TempleWare internals.
 using vector2 = Vector2D_t;
 using vector3 = Vector_t;
 using angles3 = QAngle_t;
@@ -33,9 +31,6 @@ using usercmd = CUserCmd;
 static_assert(sizeof(vector2) == sizeof(float) * 2, "Unexpected TempleWare Vector2D_t layout");
 static_assert(sizeof(vector3) == sizeof(float) * 3, "Unexpected TempleWare Vector_t layout");
 
-// Stable local-player shape matching the data contract Velocity combat code
-// expects without exposing TempleWare wrapper methods. sdk_deref_safe is kept
-// separately as provenance/gating metadata.
 struct local_state {
     std::uintptr_t controller{};
     std::uintptr_t pawn{};
@@ -74,10 +69,7 @@ struct local_state {
     return out;
 }
 
-// This report separates "the contract exists" from "the runtime path is
-// proven". A port must not infer runtime safety from compile-time availability.
 struct readiness {
-    // Already available as TempleWare-facing types/services/contracts.
     bool vector_types = true;
     bool usercmd_type = true;
     bool local_snapshot_adapter = true;
@@ -90,26 +82,21 @@ struct readiness {
     bool rich_trace_adapter = data_contracts::rich_trace;
     bool rage_config_adapter = config_contracts::rage_config;
 
-    // Runtime state that can be observed without deep entity dereferences.
     bool local_pair = false;
     bool sdk_deref_safe = false;
     bool input_runtime = false;
     bool prediction_runtime = false;
     bool trace_runtime = false;
     bool command_runtime = false;
-
-    // P4C contracts exist, but no live producer is connected yet. Keeping these
-    // separate prevents a compile-time adapter from being mistaken for a proven
-    // runtime data source.
     bool entity_cache_runtime = false;
     bool bone_runtime = false;
     bool hitbox_runtime = false;
     bool rich_trace_runtime = false;
-
-    // P4D config contract exists independently from a live TempleWare->Velocity
-    // settings translation. Runtime remains closed until a producer publishes a
-    // validated snapshot.
     bool rage_config_runtime = false;
+
+    std::uint64_t runtime_epoch = 0;
+    std::uint64_t command_generation = 0;
+    std::uint64_t config_generation = 0;
 };
 
 [[nodiscard]] inline readiness query(const LocalPlayerSnapshot& snapshot) {
@@ -120,12 +107,17 @@ struct readiness {
     r.prediction_runtime = static_cast<bool>(g_prediction);
     r.trace_runtime = Trace::Ready();
     r.command_runtime = g_command_lifecycle.runtime_ready();
+    r.entity_cache_runtime = g_runtime_services.ready(runtime_service::entity_cache);
+    r.bone_runtime = g_runtime_services.ready(runtime_service::bones);
+    r.hitbox_runtime = g_runtime_services.ready(runtime_service::hitboxes);
+    r.rich_trace_runtime = g_runtime_services.ready(runtime_service::rich_trace);
     r.rage_config_runtime = g_rage_config_store.runtime_ready();
+    r.runtime_epoch = g_runtime_services.epoch();
+    r.command_generation = g_command_lifecycle.generation();
+    r.config_generation = g_rage_config_store.generation();
     return r;
 }
 
-// "Port ready" means the compatibility prerequisites are proven. It does NOT
-// mean any Rage behaviour is enabled.
 [[nodiscard]] inline bool port_gate_open(const readiness& r) {
     return r.local_pair &&
            r.sdk_deref_safe &&
@@ -147,23 +139,27 @@ struct readiness {
 }
 
 inline void log_readiness(const LocalPlayerSnapshot& snapshot) {
-    // Log once per meaningful local provenance transition. This keeps Present
-    // quiet while still showing when the compatibility gate changes.
+    const readiness r = query(snapshot);
+
     static std::uintptr_t s_lastPawn = 0;
     static std::uintptr_t s_lastController = 0;
     static bool s_lastSdkSafe = false;
+    static std::uint64_t s_lastRuntimeEpoch = 0;
+    static std::uint64_t s_lastCommandGeneration = 0;
+    static std::uint64_t s_lastConfigGeneration = 0;
     static bool s_logged = false;
 
     if (s_logged &&
         s_lastPawn == snapshot.pawn &&
         s_lastController == snapshot.controller &&
-        s_lastSdkSafe == snapshot.sdk_deref_safe) {
+        s_lastSdkSafe == snapshot.sdk_deref_safe &&
+        s_lastRuntimeEpoch == r.runtime_epoch &&
+        s_lastCommandGeneration == r.command_generation &&
+        s_lastConfigGeneration == r.config_generation) {
         return;
     }
 
-    const readiness r = query(snapshot);
-
-    char buf[704];
+    char buf[768];
     std::snprintf(buf, sizeof(buf),
         "[P4COMPAT] TYPE MAP vector=%d usercmd=%d local=%d prediction=%d trace_api=%d command_contract=%d config_contract=%d",
         r.vector_types ? 1 : 0,
@@ -200,13 +196,23 @@ inline void log_readiness(const LocalPlayerSnapshot& snapshot) {
         r.rage_config_adapter ? 1 : 0);
     FileLog::Log(buf);
 
+    std::snprintf(buf, sizeof(buf),
+        "[P4COMPAT] LIFECYCLE epoch=%llu command_gen=%llu config_gen=%llu",
+        static_cast<unsigned long long>(r.runtime_epoch),
+        static_cast<unsigned long long>(r.command_generation),
+        static_cast<unsigned long long>(r.config_generation));
+    FileLog::Log(buf);
+
     FileLog::Log(port_gate_open(r)
         ? "[P4COMPAT] PORT GATE OPEN - compatibility prerequisites proven"
-        : "[P4COMPAT] PORT GATE BLOCKED - adapters/runtime proof still missing");
+        : "[P4COMPAT] PORT GATE BLOCKED - runtime producers still missing/unproven");
 
     s_lastPawn = snapshot.pawn;
     s_lastController = snapshot.controller;
     s_lastSdkSafe = snapshot.sdk_deref_safe;
+    s_lastRuntimeEpoch = r.runtime_epoch;
+    s_lastCommandGeneration = r.command_generation;
+    s_lastConfigGeneration = r.config_generation;
     s_logged = true;
 }
 
