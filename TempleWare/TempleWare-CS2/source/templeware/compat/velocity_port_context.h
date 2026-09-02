@@ -6,10 +6,12 @@
 // producers.
 
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <shared_mutex>
 
 #include "velocity_rage_compat.h"
+#include "../utils/filelog/filelog.h"
 
 namespace VelocityRageCompat {
 
@@ -38,6 +40,19 @@ public:
         m_snapshot.command_generation = r.command_generation;
         m_snapshot.config_generation = r.config_generation;
         ++m_snapshot.frame_sequence;
+
+        if (!m_first_update_logged) {
+            char buf[384];
+            std::snprintf(buf, sizeof(buf),
+                "[P5A] PORT CONTEXT FIRST UPDATE frame=%llu pawn=%p controller=%p sdk_safe=%d gate=%d",
+                static_cast<unsigned long long>(m_snapshot.frame_sequence),
+                reinterpret_cast<void*>(m_snapshot.local.pawn),
+                reinterpret_cast<void*>(m_snapshot.local.controller),
+                m_snapshot.local.sdk_deref_safe ? 1 : 0,
+                m_snapshot.gate_open ? 1 : 0);
+            FileLog::Log(buf);
+            m_first_update_logged = true;
+        }
     }
 
     void reset_volatile() noexcept {
@@ -49,6 +64,8 @@ public:
         m_snapshot.command_generation = g_command_lifecycle.generation();
         m_snapshot.config_generation = g_rage_config_store.generation();
         ++m_snapshot.frame_sequence;
+
+        FileLog::Log("[P5A] PORT CONTEXT RESET CLEAN");
     }
 
     [[nodiscard]] port_context_snapshot get() const noexcept {
@@ -59,6 +76,7 @@ public:
 private:
     mutable std::shared_mutex m_mutex;
     port_context_snapshot m_snapshot{};
+    bool m_first_update_logged{};
 };
 
 inline port_context_store g_port_context{};
