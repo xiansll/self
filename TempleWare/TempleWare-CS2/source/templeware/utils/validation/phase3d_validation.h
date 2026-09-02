@@ -59,12 +59,14 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
     static std::uintptr_t s_lastController = 0;
     static unsigned int s_consecutivePasses = 0;
     static bool s_pairBlocked = false;
+    static bool s_offsetsLoggedForPair = false;
 
     if (s_lastPawn != snapshot.pawn || s_lastController != snapshot.controller) {
         s_lastPawn = snapshot.pawn;
         s_lastController = snapshot.controller;
         s_consecutivePasses = 0;
         s_pairBlocked = false;
+        s_offsetsLoggedForPair = false;
     }
 
     // Do not hammer a resolver-proven pair every Present once the same wrapper
@@ -81,6 +83,20 @@ inline void Run(const LocalPlayerSnapshot& snapshot) {
         SchemaFinder::Get(hash_32_fnv1a_const("CBasePlayerController->m_bIsLocalPlayerController"));
     const std::uint32_t pawnAliveOffset =
         SchemaFinder::Get(hash_32_fnv1a_const("CCSPlayerController->m_bPawnIsAlive"));
+
+    if (!s_offsetsLoggedForPair) {
+        char buf[448];
+        std::snprintf(buf, sizeof(buf),
+            "[P3D][SCHEMA] basic offsets health=0x%X team=0x%X local=0x%X alive=0x%X pawn=%p controller=%p",
+            healthOffset,
+            teamOffset,
+            localControllerOffset,
+            pawnAliveOffset,
+            reinterpret_cast<void*>(snapshot.pawn),
+            reinterpret_cast<void*>(snapshot.controller));
+        FileLog::Log(buf);
+        s_offsetsLoggedForPair = true;
+    }
 
     const bool offsetsReady = healthOffset && teamOffset &&
         localControllerOffset && pawnAliveOffset;
