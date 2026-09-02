@@ -5,6 +5,7 @@
 #include "../../../templeware/interfaces/IEngineClient/IEngineClient.h"
 #include "../../../templeware/utils/filelog/filelog.h"
 
+#include <Windows.h>
 #include <chrono>
 #include <cstdio>
 
@@ -13,14 +14,45 @@ namespace {
         None = 0,
         EntitySystem = 1,
         GameResource = 2,
-        Mixed = 3
+        Mixed = 3,
+        ClientGlobals = 4
     };
+
+    // These are not new offsets: this is the same already-proven runtime path
+    // used by source/nerv/nerv_bridge.cpp in the current project/build.
+    constexpr std::uintptr_t kLocalPlayerPawnOffset = 0x23C6268;
+    constexpr std::uintptr_t kLocalPlayerControllerOffset = 0x23A0F30;
+
+    void ReadClientGlobalLocals(C_CSPlayerPawn*& pawn,
+                                CCSPlayerController*& controller,
+                                std::uintptr_t& clientBase) {
+        pawn = nullptr;
+        controller = nullptr;
+        clientBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleA("client.dll"));
+        if (!clientBase)
+            return;
+
+        // The offsets are version-specific. Keep this fallback fail-closed so a
+        // stale build produces nullptr diagnostics instead of taking the process
+        // down while Phase3A is validating the provider plumbing.
+        __try {
+            pawn = *reinterpret_cast<C_CSPlayerPawn**>(clientBase + kLocalPlayerPawnOffset);
+            controller = *reinterpret_cast<CCSPlayerController**>(clientBase + kLocalPlayerControllerOffset);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            pawn = nullptr;
+            controller = nullptr;
+        }
+    }
 
     void LogProviderState(LocalProvider provider,
                           C_CSPlayerPawn* entitySystemPawn,
                           CCSPlayerController* entitySystemController,
                           C_CSPlayerPawn* gameResourcePawn,
-                          CCSPlayerController* gameResourceController) {
+                          CCSPlayerController* gameResourceController,
+                          C_CSPlayerPawn* clientGlobalPawn,
+                          CCSPlayerController* clientGlobalController,
+                          std::uintptr_t clientBase) {
         using namespace std::chrono;
         static steady_clock::time_point lastLog{};
         static LocalProvider lastProvider = LocalProvider::None;
@@ -33,9 +65,9 @@ namespace {
         if (!providerChanged && !intervalElapsed)
             return;
 
-        char buf[512];
+        char buf[768];
         std::snprintf(buf, sizeof(buf),
-            "[Validation] LocalProvider: selected=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p",
+            "[Validation] LocalProvider: selected=%d I::EntitySystem=%p es_pawn=%p es_ctrl=%p GameEntity=%p GameEntity.Instance=%p gr_pawn=%p gr_ctrl=%p client=%p cg_pawn=%p cg_ctrl=%p",
             static_cast<int>(provider),
             static_cast<void*>(I::EntitySystem),
             static_cast<void*>(entitySystemPawn),
@@ -43,7 +75,10 @@ namespace {
             static_cast<void*>(I::GameEntity),
             I::GameEntity ? static_cast<void*>(I::GameEntity->Instance) : nullptr,
             static_cast<void*>(gameResourcePawn),
-            static_cast<void*>(gameResourceController));
+            static_cast<void*>(gameResourceController),
+            reinterpret_cast<void*>(clientBase),
+            static_cast<void*>(clientGlobalPawn),
+            static_cast<void*>(clientGlobalController));
         FileLog::Log(buf);
 
         lastProvider = provider;
@@ -76,35 +111,51 @@ void LocalPlayerCache::update() {
         gameResourceController = reinterpret_cast<CCSPlayerController*>(I::GameEntity->Instance->get_local_controller());
     }
 
-    // Prefer the independently resolved EntitySystem path already present in
-    // TempleWare. Fall back per-pointer to the GameResourceService path. This
-    // avoids treating one broken local accessor as proof that the entire cache
-    // is unavailable, while still keeping both existing providers observable.
-    C_CSPlayerPawn* local_pawn = entitySystemPawn ? entitySystemPawn : gameResourcePawn;
-    CCSPlayerController* local_controller = entitySystemController ? entitySystemController : gameResourceController;
+    C_CSPlayerPawn* clientGlobalPawn = nullptr;
+    CCSPlayerController* clientGlobalController = nullptr;
+    std::uintptr_t clientBase = 0;
+    ReadClientGlobalLocals(clientGlobalPawn, clientGlobalController, clientBase);
+
+    // Prefer the SDK paths when they work. The current runtime log proves both
+    // SDK local-accessor functions resolve to nullptr while the existing nerv
+    // client-global path resolves a live pawn, so use that same proven source as
+    // the final fallback rather than inventing another signature.
+    C_CSPlayerPawn* local_pawn = entitySystemPawn ? entitySystemPawn :
+        (gameResourcePawn ? gameResourcePawn : clientGlobalPawn);
+    CCSPlayerController* local_controller = entitySystemController ? entitySystemController :
+        (gameResourceController ? gameResourceController : clientGlobalController);
+
+    const bool usedEntitySystem =
+        (local_pawn && local_pawn == entitySystemPawn) ||
+        (local_controller && local_controller == entitySystemController);
+    const bool usedGameResource =
+        (local_pawn && local_pawn == gameResourcePawn && !entitySystemPawn) ||
+        (local_controller && local_controller == gameResourceController && !entitySystemController);
+    const bool usedClientGlobals =
+        (local_pawn && local_pawn == clientGlobalPawn && !entitySystemPawn && !gameResourcePawn) ||
+        (local_controller && local_controller == clientGlobalController && !entitySystemController && !gameResourceController);
+
+    const int sourcesUsed = static_cast<int>(usedEntitySystem) +
+        static_cast<int>(usedGameResource) + static_cast<int>(usedClientGlobals);
 
     LocalProvider provider = LocalProvider::None;
-    if (local_pawn || local_controller) {
-        const bool usedEntitySystem =
-            (local_pawn && local_pawn == entitySystemPawn) ||
-            (local_controller && local_controller == entitySystemController);
-        const bool usedGameResource =
-            (local_pawn && local_pawn == gameResourcePawn && !entitySystemPawn) ||
-            (local_controller && local_controller == gameResourceController && !entitySystemController);
-
-        if (usedEntitySystem && usedGameResource)
-            provider = LocalProvider::Mixed;
-        else if (usedEntitySystem)
-            provider = LocalProvider::EntitySystem;
-        else if (usedGameResource)
-            provider = LocalProvider::GameResource;
-    }
+    if (sourcesUsed > 1)
+        provider = LocalProvider::Mixed;
+    else if (usedEntitySystem)
+        provider = LocalProvider::EntitySystem;
+    else if (usedGameResource)
+        provider = LocalProvider::GameResource;
+    else if (usedClientGlobals)
+        provider = LocalProvider::ClientGlobals;
 
     LogProviderState(provider,
                      entitySystemPawn,
                      entitySystemController,
                      gameResourcePawn,
-                     gameResourceController);
+                     gameResourceController,
+                     clientGlobalPawn,
+                     clientGlobalController,
+                     clientBase);
 
     m_snapshot.controller = reinterpret_cast<std::uintptr_t>(local_controller);
     m_snapshot.pawn = reinterpret_cast<std::uintptr_t>(local_pawn);
