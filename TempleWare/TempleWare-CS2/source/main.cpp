@@ -25,6 +25,7 @@
 #include "templeware/utils/validation/phase3d_validation.h"
 #include "templeware/compat/velocity_rage_compat.h"
 #include "templeware/compat/velocity_port_context.h"
+#include "templeware/compat/velocity_feature_integration.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -115,6 +116,11 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             VelocityRageCompat::initialize_non_gameplay_defaults();
             FileLog::Log("[P4COMPAT] NON-GAMEPLAY DEFAULT CONFIG PUBLISHED");
             FileLog::Log("[P5A] READ-ONLY PORT CONTEXT ACTIVE");
+
+            // P5C owns only feature registration/context/provider lifecycle.
+            // Its command lane remains dormant until the owner explicitly calls
+            // dispatch_command() from a separately validated command source.
+            VelocityRageCompat::FeatureIntegration::initialize();
 
             // Trace::Initialize() runs very early with the overlay. Re-run only
             // the exact existing resolver expressions after foundation init so
@@ -231,6 +237,10 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // consumers. It only aggregates already-owned compatibility state.
             VelocityRageCompat::g_port_context.update(snapshot, true);
 
+            // P5C dispatches only the read-only frame lane. With no registered
+            // features/providers this is a no-op apart from readiness diagnostics.
+            VelocityRageCompat::FeatureIntegration::on_frame();
+
             // Basic wrapper proof is intentionally insufficient to open identity,
             // scene-node, or skeleton traversal. Those remain on a separate gate.
             if (snapshot.sdk_deep_graph_safe)
@@ -270,9 +280,11 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         }
         else if (s_wasInGame)
         {
-            // Reset both the proven local cache and every volatile compatibility
-            // publication. Config and process-level wrapper proof stay published.
+            // Reset local state, owner-supplied feature/provider state, then the
+            // central compatibility publications. Bindings themselves are kept so
+            // validated process-lifetime providers do not need re-registration.
             g_local_player_cache->reset();
+            VelocityRageCompat::FeatureIntegration::reset_volatile();
             VelocityRageCompat::reset_volatile_runtime();
             VelocityRageCompat::g_port_context.reset_volatile();
             FileLog::Log("[P4COMPAT] VOLATILE RUNTIME RESET");
@@ -326,7 +338,13 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         g_menuAnim += (tgt - g_menuAnim) * (step < 1.f ? step : 1.f);
     }
     if (g_menuAnim > 0.01f)
+    {
         Gui::Render(g_menuAnim);
+
+        // Registered features get a menu-frame callback without TempleWare
+        // knowing or implementing any feature-specific controls.
+        VelocityRageCompat::FeatureIntegration::on_menu();
+    }
 
     ImGui::Render();
     g_pContext->OMSetRenderTargets(1, &mainRenderTargetView, NULL);
@@ -353,6 +371,7 @@ DWORD WINAPI MainThread(LPVOID lpReserved)
         Sleep(100);
     } while (!GetAsyncKeyState(VK_END));
 
+    VelocityRageCompat::FeatureIntegration::shutdown();
     VelocityRageCompat::g_port_context.reset_volatile();
     VelocityRageCompat::shutdown_runtime();
     FileLog::Log("[P4COMPAT] RUNTIME SHUTDOWN CLEAN");
