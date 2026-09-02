@@ -43,9 +43,9 @@ struct LocalPlayerSnapshot {
     // pointer-only reference provider. This proves pointer provenance only.
     bool sdk_resolver_pair_proven = false;
 
-    // True after a read-only semantic probe has validated the basic pawn and
-    // controller wrapper fields used by LocalPlayerCache (health/team/local
-    // controller/alive/desired-team) without exceptions and with sane values.
+    // True after a read-only semantic probe has validated the current
+    // schema-backed basic fields (health/team/local-controller/alive) without
+    // exceptions and with sane values. It does not cover view-team or graph data.
     bool sdk_wrapper_semantics_proven = false;
 
     // Compatibility-facing basic wrapper gate. This intentionally does NOT mean
