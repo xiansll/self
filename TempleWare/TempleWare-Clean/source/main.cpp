@@ -14,6 +14,10 @@
 #include "imgui/imgui_impl_win32.h"
 #include "kiero/kiero.h"
 
+#include "../../TempleWare-CS2/source/esp/esp.h"
+#include "../../TempleWare-CS2/source/icons/icons.h"
+#include "../../TempleWare-CS2/source/chams/chams.h"
+
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
@@ -44,6 +48,8 @@ namespace CleanGui
     int selectedPage = 0;
     bool showStatusPanel = true;
     bool testToggle = false;
+    bool espModuleReady = false;
+    bool iconModuleReady = false;
     float uiScale = 1.0f;
     ImVec4 accent = ImVec4(1.00f, 0.38f, 0.08f, 1.00f);
 
@@ -121,6 +127,39 @@ namespace CleanGui
         }
 
         CloseHandle(file);
+    }
+
+    bool ShouldTraceEspFrame() noexcept
+    {
+        static ULONGLONG lastTrace = 0;
+        const ULONGLONG now = GetTickCount64();
+
+        if (now - lastTrace < 100)
+            return false;
+
+        lastTrace = now;
+        return true;
+    }
+
+    void RunEspFrame()
+    {
+        const bool trace = ShouldTraceEspFrame();
+
+        if (trace) Log("[ESP-10] Esp::Draw BEGIN");
+        Esp::Draw();
+        if (trace) Log("[ESP-11] Esp::Draw END");
+
+        if (trace) Log("[ESP-20] Esp::DrawOverlay BEGIN");
+        Esp::DrawOverlay();
+        if (trace) Log("[ESP-21] Esp::DrawOverlay END");
+
+        if (trace) Log("[ESP-30] Esp::UpdateMisc BEGIN");
+        Esp::UpdateMisc();
+        if (trace) Log("[ESP-31] Esp::UpdateMisc END");
+
+        if (trace) Log("[ESP-40] Esp::UpdateSkins BEGIN");
+        Esp::UpdateSkins();
+        if (trace) Log("[ESP-41] Esp::UpdateSkins END");
     }
 
     void ApplyStyle()
@@ -313,6 +352,18 @@ namespace CleanGui
             return false;
         }
 
+        Log("[ESP-00] Icons::Initialize BEGIN");
+        iconModuleReady = Icons::Initialize(device, context);
+        Log(iconModuleReady
+            ? "[ESP-01] Icons::Initialize END ready=1"
+            : "[ESP-01] Icons::Initialize END ready=0");
+
+        Log("[ESP-02] Esp::Initialize BEGIN");
+        espModuleReady = Esp::Initialize();
+        Log(espModuleReady
+            ? "[ESP-03] Esp::Initialize END ready=1"
+            : "[ESP-03] Esp::Initialize END ready=0");
+
         initialized.store(true);
         Log("[CLEAN] ImGui ready");
         return true;
@@ -343,7 +394,7 @@ namespace CleanGui
     {
         ImGui::TextColored(accent, "CLEAN RUNTIME");
         ImGui::TextWrapped(
-            "Only the D3D11 overlay and this ImGui menu are active.");
+            "Clean overlay + the complete ESP module are active.");
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -354,17 +405,29 @@ namespace CleanGui
             ImVec4(0.35f, 0.90f, 0.55f, 1.00f),
             "ONLINE");
 
-        ImGui::Text("Game SDK");
-        ImGui::SameLine(170.0f);
-        ImGui::TextColored(
-            ImVec4(0.62f, 0.64f, 0.70f, 1.00f),
-            "NOT CONNECTED");
+        const Esp::Stats& stats = Esp::GetStats();
 
-        ImGui::Text("Feature modules");
+        ImGui::Text("ESP module");
         ImGui::SameLine(170.0f);
         ImGui::TextColored(
-            ImVec4(0.62f, 0.64f, 0.70f, 1.00f),
-            "NOT LOADED");
+            espModuleReady
+                ? ImVec4(0.35f, 0.90f, 0.55f, 1.00f)
+                : ImVec4(0.95f, 0.65f, 0.25f, 1.00f),
+            espModuleReady ? "READY" : "WAITING");
+
+        ImGui::Text("Entity / matrix");
+        ImGui::SameLine(170.0f);
+        ImGui::Text(
+            "%s / %s",
+            stats.entitySystemReady ? "READY" : "WAIT",
+            stats.viewMatrixReady ? "READY" : "WAIT");
+
+        ImGui::Text("Players / enemies");
+        ImGui::SameLine(170.0f);
+        ImGui::Text(
+            "%d / %d",
+            stats.playersFound,
+            stats.enemiesDrawn);
 
         ImGui::Spacing();
         ImGui::Checkbox("Show status panel", &showStatusPanel);
@@ -374,15 +437,30 @@ namespace CleanGui
     void DrawVisuals()
     {
         ImGui::TextColored(accent, "VISUALS");
-        ImGui::TextWrapped(
-            "This page is intentionally empty. ESP will be moved here only "
-            "after the clean overlay survives lobby and match transitions.");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        ImGui::TextColored(
-            ImVec4(0.62f, 0.64f, 0.70f, 1.00f),
-            "No game memory is read by this build.");
+
+        Esp::Config& config = Esp::g_config;
+
+        ImGui::Checkbox("Enable ESP", &config.enabled);
+        ImGui::Checkbox("Box", &config.box);
+        ImGui::Checkbox("Name", &config.name);
+        ImGui::Checkbox("Health bar", &config.healthBar);
+        ImGui::Checkbox("Skeleton", &config.skeleton);
+        ImGui::Checkbox("Weapon", &config.weapon);
+        ImGui::Checkbox("Ammo bar", &config.ammoBar);
+        ImGui::Checkbox("Flags", &config.flags);
+        ImGui::Checkbox("Distance", &config.distance);
+        ImGui::Checkbox("Team ESP", &config.teamEsp);
+        ImGui::Checkbox("Snapline", &config.snapline);
+        ImGui::Checkbox("Head circle", &config.headCircle);
+        ImGui::Checkbox("Off-screen arrows", &config.offArrows);
+        ImGui::Checkbox("Item ESP", &config.itemEsp);
+        ImGui::Checkbox("Bomb ESP", &config.bombEsp);
+        ImGui::Checkbox("Grenade ESP", &config.nadeEsp);
+        ImGui::Checkbox("Spectator list", &config.specList);
+        ImGui::Checkbox("Watermark", &config.watermark);
+        ImGui::Checkbox("Crosshair", &config.crosshair);
+
+        ImGui::ColorEdit4("Box color", config.boxColor);
     }
 
     void DrawSettings()
@@ -501,6 +579,10 @@ namespace CleanGui
                 reinterpret_cast<LONG_PTR>(originalWndProc));
         }
 
+        Log("[ESP-90] ESP shutdown BEGIN");
+        Chams::Shutdown();
+        Log("[ESP-91] ESP shutdown END");
+
         ImGui_ImplDX11_Shutdown();
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
@@ -543,6 +625,7 @@ namespace CleanGui
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
+        RunEspFrame();
         DrawMenu();
 
         ImGui::Render();
