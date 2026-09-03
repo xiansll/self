@@ -108,15 +108,13 @@
 
   <ItemGroup>
     <ClCompile Include="source\main.cpp" />
+    <ClCompile Include="source\trace_sdk_bridge.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\esp\esp.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\chams\chams.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\trace\trace.cpp" />
-    <ClCompile Include="..\TempleWare-CS2\source\andro\CS2\SDK\SDK.cpp" />
-    <ClCompile Include="..\TempleWare-CS2\source\andro\CS2\SDK\CFunctionList.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\andro\CS2\CBasePattern.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\andro\Common\MemoryEngine.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\andro\Common\DevLog.cpp" />
-    <ClCompile Include="..\TempleWare-CS2\source\andro\CS2\SDK\Interface\Interface.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\icons\icons.cpp" />
 
     <ClCompile Include="..\TempleWare-CS2\external\imgui\imgui.cpp" />
