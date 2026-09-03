@@ -110,6 +110,7 @@
     <ClCompile Include="source\main.cpp" />
     <ClCompile Include="source\esp_feature_stubs.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\esp\esp.cpp" />
+    <ClCompile Include="..\TempleWare-CS2\source\chams\chams.cpp" />
     <ClCompile Include="..\TempleWare-CS2\source\icons\icons.cpp" />
 
     <ClCompile Include="..\TempleWare-CS2\external\imgui\imgui.cpp" />
