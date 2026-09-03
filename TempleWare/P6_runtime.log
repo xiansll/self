@@ -1,27 +1,5 @@
-[P6] INIT
-[P6] SELF TEST PASS
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EXECUTION=DISABLED
-[P6] LIVE SOURCE ENABLED
-[P6] LIVE READY entities=9
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EXECUTION=DISABLED
-[P6] SELF TEST PASS
 [P6] RESET
-[P6] INIT
-[P6] SELF TEST PASS
+[P9] Runtime state reset
 [P6] FULL SYNTH BEGIN
 [P6] candidates=3
 [P6] selected=2
@@ -29,181 +7,87 @@
 [P6] command=UNAVAILABLE
 [P6] FULL SYNTH COMPLETE
 [P6] SELF TEST PASS
+[P6] EVAL TESTS PASS
 [P6] EXECUTION=DISABLED
-[P6] LIVE SOURCE ENABLED
+[P9] Runtime state reset
+[P9] Runtime state reset
+[P6] VALIDATION FAIL (20/21, 1030us)
+[P6] VALIDATION first_fail=trace_provider_bound
+[P9] Runtime state reset
+[P9] Runtime state reset
+[P6] VALIDATION FAIL (20/21, 998us)
+[P6] VALIDATION first_fail=trace_provider_bound
+[P6] FULL SYNTH BEGIN
+[P6] candidates=3
+[P6] selected=2
+[P6] trace=BLOCKED
+[P6] command=UNAVAILABLE
+[P6] FULL SYNTH COMPLETE
+[P6] SELF TEST PASS
+[P6] EVAL TESTS PASS
+[P6] EXECUTION=DISABLED
+[P6] FULL SYNTH BEGIN
+[P6] candidates=3
+[P6] selected=2
+[P6] trace=BLOCKED
+[P6] command=UNAVAILABLE
+[P6] FULL SYNTH COMPLETE
+[P6] SELF TEST PASS
+[P6] EVAL TESTS PASS
+[P6] EXECUTION=DISABLED
+[P9] Runtime state reset
+[P9] Runtime state reset
+[P6] VALIDATION FAIL (20/21, 1014us)
+[P6] VALIDATION first_fail=trace_provider_bound
 [P6] LIVE frame=READY
 [P6] LIVE weapon=READY
 [P6] LIVE prediction=READY
 [P6] LIVE bones=READY
 [P6] LIVE hitboxes=READY
-[P6] LIVE entities=8
-[P6] LIVE READY entities=8
-[P6] LIVE entities=7
-[P6] LIVE entities=6
+[P6] LIVE entities=5
+[P9] Runtime state reset
+[P9] Runtime state reset
+[P6] VALIDATION PASS (21/21, 1031us)
+[P6] LIVE frame=READY
+[P6] LIVE weapon=READY
+[P6] LIVE prediction=READY
+[P6] LIVE bones=READY
+[P6] LIVE hitboxes=READY
+[P6] LIVE entities=5
+[P6] LIVE frame=READY
+[P6] LIVE weapon=READY
+[P6] LIVE prediction=READY
+[P6] LIVE bones=READY
+[P6] LIVE hitboxes=READY
+[P6] LIVE entities=5
+[P6] LIVE frame=READY
+[P6] LIVE weapon=READY
+[P6] LIVE prediction=READY
+[P6] LIVE bones=READY
+[P6] LIVE hitboxes=READY
+[P6] LIVE entities=5
+[P6] LIVE frame=READY
+[P6] LIVE weapon=READY
+[P6] LIVE prediction=READY
+[P6] LIVE bones=READY
+[P6] LIVE hitboxes=READY
 [P6] LIVE entities=5
 [P6] LIVE entities=4
-[P6] LIVE entities=3
-[P6] LIVE entities=2
-[P6] RESET
-[P6] VALIDATION PASS (16/16, 5173us)
-[P6] INIT
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] EXECUTION=DISABLED
-[P6] LIVE SOURCE ENABLED
 [P6] LIVE frame=READY
 [P6] LIVE weapon=READY
 [P6] LIVE prediction=READY
 [P6] LIVE bones=READY
 [P6] LIVE hitboxes=READY
-[P6] LIVE entities=2
-[P6] LIVE READY entities=2
-[P6] VALIDATION PASS (16/16, 1007us)
-[P6] RESET
-[P6] INIT
-[P9] Trace initialization failed
-[P9] Runtime providers bound to hub
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] EXECUTION=DISABLED
-[P6] LIVE SOURCE ENABLED
+[P6] LIVE entities=5
 [P6] LIVE frame=READY
 [P6] LIVE weapon=READY
 [P6] LIVE prediction=READY
 [P6] LIVE bones=READY
 [P6] LIVE hitboxes=READY
-[P6] LIVE entities=9
-[P6] LIVE READY entities=9
-[P9] Runtime state reset
-[P9] Runtime state reset
-[P6] VALIDATION FAIL (20/21, 996us)
-[P6] VALIDATION first_fail=penetration_gates_ready
-[P6] LIVE entities=8
-[P9] Runtime state reset
-[P6] RESET
-[P6] INIT
-[P9] Trace initialization failed
-[P9] Runtime providers bound to hub
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] EXECUTION=DISABLED
-[P6] LIVE SOURCE ENABLED
+[P6] LIVE entities=5
 [P6] LIVE frame=READY
 [P6] LIVE weapon=READY
 [P6] LIVE prediction=READY
 [P6] LIVE bones=READY
 [P6] LIVE hitboxes=READY
-[P6] LIVE entities=9
-[P6] LIVE READY entities=9
-[P9] Runtime state reset
-[P9] Runtime state reset
-[P6] VALIDATION FAIL (20/21, 1056us)
-[P6] VALIDATION first_fail=penetration_gates_ready
-[P9] Runtime state reset
-[P6] RESET
-[P6] INIT
-[P9] Trace initialization failed
-[P9] Runtime providers bound to hub
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] EXECUTION=DISABLED
-[P6] LIVE SOURCE ENABLED
-[P6] LIVE frame=READY
-[P6] LIVE weapon=READY
-[P6] LIVE prediction=READY
-[P6] LIVE bones=READY
-[P6] LIVE hitboxes=READY
-[P6] LIVE entities=9
-[P6] LIVE READY entities=9
-[P9] Runtime state reset
-[P9] Runtime state reset
-[P6] VALIDATION PASS (21/21, 1034us)
-[P9] Runtime state reset
-[P6] RESET
-[P6] INIT
-[P9] Trace initialization failed
-[P9] Runtime providers bound to hub
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] EXECUTION=DISABLED
-[P6] LIVE SOURCE ENABLED
-[P6] LIVE frame=READY
-[P6] LIVE weapon=READY
-[P6] LIVE prediction=READY
-[P6] LIVE bones=READY
-[P6] LIVE hitboxes=READY
-[P6] LIVE entities=9
-[P6] LIVE READY entities=9
-[P9] Runtime state reset
-[P9] Runtime state reset
-[P6] VALIDATION PASS (21/21, 1065us)
-[P9] Runtime state reset
-[P6] RESET
-[P9] Runtime state reset
-[P9] Runtime state reset
-[P6] VALIDATION FAIL (20/21, 1003us)
-[P6] VALIDATION first_fail=trace_provider_bound
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] EXECUTION=DISABLED
-[P6] RESET
-[P9] Runtime state reset
-[P6] FULL SYNTH BEGIN
-[P6] candidates=3
-[P6] selected=2
-[P6] trace=BLOCKED
-[P6] command=UNAVAILABLE
-[P6] FULL SYNTH COMPLETE
-[P6] SELF TEST PASS
-[P6] EVAL TESTS PASS
-[P6] EXECUTION=DISABLED
-[P9] Runtime state reset
-[P9] Runtime state reset
-[P6] VALIDATION FAIL (20/21, 1026us)
-[P6] VALIDATION first_fail=trace_provider_bound
+[P6] LIVE entities=5

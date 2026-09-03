@@ -6,6 +6,9 @@
 
 #include "../../interfaces/CUserCmd/CUserCmd.h"
 #include "../../interfaces/CCSGOInput/CCSGOInput.h"
+#include "../../interfaces/interfaces.h"
+#include "../../globals/globals.h"
+#include "../../utils/filelog/filelog.h"
 #include "../../../esp/esp.h"
 
 #include <cmath>
@@ -13,12 +16,11 @@
 
 namespace LegitCmd
 {
-    inline constexpr uintptr_t kDw_dwLocalPlayerPawn = 0x23C6268;
     inline constexpr uintptr_t kGameSceneNode = 0x330;
     inline constexpr uintptr_t kVecAbsOrigin = 0xC8;
     inline constexpr uintptr_t kVecOrigin = 0x80;
     inline constexpr uintptr_t kViewOffset = 0xE78;
-    inline constexpr uintptr_t kTeamNum = 0x3CB;
+    inline constexpr uintptr_t kTeamNum = 0x3E7;
     inline constexpr uintptr_t kHealth = 0x34C;
     inline constexpr uintptr_t kShotsFired = 0x1C8C;
     inline constexpr uintptr_t kAimPunchServices = 0x14B8;
@@ -92,12 +94,12 @@ namespace LegitCmd
     inline void ResolveAimPunch()
     {
         if (g_aimPunchResolved) return;
-        g_aimPunchResolved = true;
         __try {
             auto p = M::scan("client.dll", "14 00 00 48 8D 54 24 20 E8 ? ? ? ?");
             if (p) {
                 int32_t rel = *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(p) + 9);
                 g_getAimPunch = reinterpret_cast<fnGetAimPunch_t>(reinterpret_cast<uintptr_t>(p) + 13 + rel);
+                g_aimPunchResolved = true;
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
@@ -115,8 +117,10 @@ namespace LegitCmd
         return false;
     }
 
-    // Entity list: resolve CGameEntitySystem* via pattern (matches esp.cpp)
-    inline uintptr_t g_entitySystem = 0;
+    // Entity list: resolve CGameEntitySystem** global address via pattern (matches esp.cpp)
+    // We cache the GLOBAL ADDRESS (stable in .data), NOT the pointer value —
+    // the value changes on level transitions when the entity system is recreated.
+    inline uintptr_t g_entitySystemGlobal = 0;
     inline bool g_entitySystemResolved = false;
     inline constexpr uintptr_t kEntityListOffset = 0x10;
     inline constexpr uintptr_t kEntityEntryStride = 0x70;
@@ -126,29 +130,31 @@ namespace LegitCmd
     inline void ResolveEntitySystem()
     {
         if (g_entitySystemResolved) return;
-        g_entitySystemResolved = true;
         __try {
             auto p = M::scan("client.dll", "48 8B 0D ? ? ? ? 48 89 7C 24 ? 8B FA C1 EB");
             if (p) {
                 uintptr_t addr = reinterpret_cast<uintptr_t>(p);
                 int32_t rel = *reinterpret_cast<int32_t*>(addr + 3);
-                uintptr_t global = addr + 7 + rel;
-                g_entitySystem = *reinterpret_cast<uintptr_t*>(global);
+                g_entitySystemGlobal = addr + 7 + rel;
+                g_entitySystemResolved = true;
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {}
     }
 
     inline uintptr_t GetEntity(int index)
     {
-        if (!g_entitySystem) { ResolveEntitySystem(); }
-        if (!IsValidPtr(g_entitySystem) || index < 0 || index > 0x7FFE) return 0;
-
-        int chunk = index >> 9;
-        if (chunk > 0x3F) return 0;
+        if (!g_entitySystemGlobal) { ResolveEntitySystem(); }
+        if (!g_entitySystemGlobal || index < 0 || index > 64) return 0;
 
         __try {
+            uintptr_t entitySystem = *reinterpret_cast<uintptr_t*>(g_entitySystemGlobal);
+            if (!IsValidPtr(entitySystem)) return 0;
+
+            int chunk = index >> 9;
+            if (chunk > 0x3F) return 0;
+
             uintptr_t chunkPtr = *reinterpret_cast<uintptr_t*>(
-                g_entitySystem + kEntityListOffset + static_cast<uintptr_t>(chunk) * 8);
+                entitySystem + kEntityListOffset + static_cast<uintptr_t>(chunk) * 8);
             if (!IsValidPtr(chunkPtr)) return 0;
 
             uintptr_t entry = chunkPtr + static_cast<uintptr_t>(index & 0x1FF) * kEntityEntryStride;
@@ -161,7 +167,9 @@ namespace LegitCmd
         return 0;
     }
 
-    // Main: called from CreateMove after original + before movement fix.
+    // Main: called from CreateMove ONLY when RuntimeGate is READY.
+    // g_ctx->local_pawn and g_ctx->local_controller are guaranteed
+    // valid and stable by the gate — no redundant engine/SDK checks needed.
     inline void OnCreateMove(CUserCmd* cmd, CCSGOInput* input) noexcept
     {
         auto& ab = Esp::g_aimbot;
@@ -170,15 +178,11 @@ namespace LegitCmd
         if (!ab.enable && !ab.rcs && !tg.enable)
             return;
 
-        HMODULE client = GetModuleHandleA("client.dll");
-        if (!client) return;
-        uintptr_t clientBase = reinterpret_cast<uintptr_t>(client);
+        if (!cmd || !input) return;
 
-        uintptr_t localPawn = *reinterpret_cast<uintptr_t*>(clientBase + kDw_dwLocalPlayerPawn);
+        // Pawn is gate-validated, just cast
+        uintptr_t localPawn = reinterpret_cast<uintptr_t>(g_ctx->local_pawn);
         if (!IsValidPtr(localPawn)) return;
-
-        int localHealth = *reinterpret_cast<int32_t*>(localPawn + kHealth);
-        if (localHealth <= 0) return;
 
         auto* base = cmd->csgoUserCmd.mutable_base();
         if (!base) return;
@@ -187,10 +191,12 @@ namespace LegitCmd
         float curY = base->viewangles().y();
         if (!std::isfinite(curP) || !std::isfinite(curY)) return;
 
-        int localTeam = *reinterpret_cast<uint8_t*>(localPawn + kTeamNum);
-
-        // --- RCS state ---
-        int shots = *reinterpret_cast<int32_t*>(localPawn + kShotsFired);
+        int localTeam = 0;
+        int shots = 0;
+        __try {
+            localTeam = *reinterpret_cast<uint8_t*>(localPawn + kTeamNum);
+            shots = *reinterpret_cast<int32_t*>(localPawn + kShotsFired);
+        } __except (EXCEPTION_EXECUTE_HANDLER) { return; }
         float punchX = 0.f, punchY = 0.f;
         bool hasPunch = ab.rcs && shots > 1 && GetAimPunch(localPawn, punchX, punchY);
         static float lastPunchX = 0.f, lastPunchY = 0.f;
@@ -227,7 +233,7 @@ namespace LegitCmd
                 bool found = false;
                 float tp = 0.f, ty = 0.f;
 
-                for (int i = 1; i <= 0x7FFE; ++i)
+                for (int i = 1; i <= 64; ++i)
                 {
                     uintptr_t ent = GetEntity(i);
                     if (!ent || ent == localPawn) continue;

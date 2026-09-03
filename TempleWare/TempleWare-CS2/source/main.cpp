@@ -36,6 +36,7 @@
 #include "templeware/rage/rage_execution.h"
 #include "templeware/rage/rage_cmd_execution.h"
 #include "templeware/hooks/hooks.h"
+#include "templeware/runtime_gate.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -365,20 +366,38 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         s_wasInGame = inGame;
     }
 
+    { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] IMGUI_BEGIN"); }
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     Gui::MaybeRebuildFont();
     ImGui::NewFrame();
+    { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] IMGUI_END"); }
 
-    Esp::Draw();
-    Esp::DrawOverlay();
-    // UpdateAim + UpdateTrigger moved to CUserCmd (LegitCmd::OnCreateMove in CreateMove hook)
-    Esp::UpdateMisc();
-    Esp::UpdateSkins();
-    nerv_bridge::tick(g_showMenu, (void*)g_ctx->local_pawn, (void*)g_ctx->local_controller);
+    if (RuntimeGate::IsReady())
+    {
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] ESP_DRAW_BEGIN"); }
+        Esp::Draw();
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] ESP_DRAW_END"); }
 
-    // --- Rage Pipeline Tick ---
-    if (foundationInit && RageDryRun::Live::g_enabled)
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] ESP_OVERLAY_BEGIN"); }
+        Esp::DrawOverlay();
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] ESP_OVERLAY_END"); }
+
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] MISC_BEGIN"); }
+        Esp::UpdateMisc();
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] MISC_END"); }
+
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] SKINS_BEGIN"); }
+        Esp::UpdateSkins();
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] SKINS_END"); }
+
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] NERV_BEGIN"); }
+        nerv_bridge::tick(g_showMenu, (void*)g_ctx->local_pawn, (void*)g_ctx->local_controller);
+        { static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[P] NERV_END"); }
+    }
+
+    // --- Rage Pipeline Tick (gated behind RuntimeGate) ---
+    if (foundationInit && RageDryRun::Live::g_enabled && RuntimeGate::IsReady())
     {
         auto& rs = RageDryRun::g_state;
         const auto& rage = Esp::g_rage;
@@ -406,53 +425,47 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         // Detect active weapon group from local player's weapon name
         int activeGroup = 2; // default rifle
         {
-            HMODULE cl = GetModuleHandleA("client.dll");
-            if (cl)
+            uintptr_t lp = reinterpret_cast<uintptr_t>(g_ctx->local_pawn);
+            if (lp >= 0x10000 && lp < 0x0000FFFFFFFFFFFFull)
             {
-                uintptr_t cb = reinterpret_cast<uintptr_t>(cl);
-                uintptr_t lp = *reinterpret_cast<uintptr_t*>(cb + 0x23C6268);
-                if (lp >= 0x10000 && lp < 0x0000FFFFFFFFFFFFull)
+                char wpnName[48] = {};
+                uintptr_t ws = *reinterpret_cast<uintptr_t*>(lp + 0x1208);
+                if (ws >= 0x10000 && ws < 0x0000FFFFFFFFFFFFull)
                 {
-                    char wpnName[48] = {};
-                    // Read weapon name via ESP's proven path
-                    uintptr_t ws = *reinterpret_cast<uintptr_t*>(lp + 0x1208);
-                    if (ws >= 0x10000 && ws < 0x0000FFFFFFFFFFFFull)
+                    uint32_t hAct = *reinterpret_cast<uint32_t*>(ws + 0x60);
+                    uintptr_t wpn = Esp::LookupEntity(static_cast<int>(hAct & 0x7FFF));
+                    if (wpn)
                     {
-                        uint32_t hAct = *reinterpret_cast<uint32_t*>(ws + 0x60);
-                        uintptr_t wpn = Esp::LookupEntity(static_cast<int>(hAct & 0x7FFF));
-                        if (wpn)
+                        uintptr_t vd = *reinterpret_cast<uintptr_t*>(wpn + 0x380 + 0x8);
+                        if (vd >= 0x10000 && vd < 0x0000FFFFFFFFFFFFull)
                         {
-                            uintptr_t vd = *reinterpret_cast<uintptr_t*>(wpn + 0x380 + 0x8);
-                            if (vd >= 0x10000 && vd < 0x0000FFFFFFFFFFFFull)
+                            const char* n = *reinterpret_cast<const char* const*>(vd + 0x720);
+                            if (n && reinterpret_cast<uintptr_t>(n) >= 0x10000)
                             {
-                                const char* n = *reinterpret_cast<const char* const*>(vd + 0x720);
-                                if (n && reinterpret_cast<uintptr_t>(n) >= 0x10000)
-                                {
-                                    if (std::strncmp(n, "weapon_", 7) == 0) n += 7;
-                                    std::snprintf(wpnName, sizeof(wpnName), "%s", n);
-                                }
+                                if (std::strncmp(n, "weapon_", 7) == 0) n += 7;
+                                std::snprintf(wpnName, sizeof(wpnName), "%s", n);
                             }
                         }
                     }
-                    if (wpnName[0])
-                    {
-                        auto has = [&](const char* s) { return std::strstr(wpnName, s) != nullptr; };
-                        if (has("awp") || has("ssg08") || has("scar20") || has("g3sg1"))
-                            activeGroup = 4; // sniper
-                        else if (has("nova") || has("xm1014") || has("mag7") || has("sawedoff"))
-                            activeGroup = 3; // shotgun
-                        else if (has("mp9") || has("mac10") || has("mp7") || has("mp5") || has("ump45") || has("p90") || has("bizon"))
-                            activeGroup = 1; // smg
-                        else if (has("ak47") || has("m4a1") || has("aug") || has("sg556") || has("sg553") || has("galil") || has("famas"))
-                            activeGroup = 2; // rifle
-                        else if (has("negev") || has("m249"))
-                            activeGroup = 5; // lmg
-                        else if (has("knife") || has("bayonet") || has("grenade") || has("flashbang") || has("molotov") ||
-                                 has("smoke") || has("decoy") || has("incgrenade") || has("c4") || has("taser") || has("healthshot"))
-                            activeGroup = -1; // utility, don't rage
-                        else
-                            activeGroup = 0; // pistol
-                    }
+                }
+                if (wpnName[0])
+                {
+                    auto has = [&](const char* s) { return std::strstr(wpnName, s) != nullptr; };
+                    if (has("awp") || has("ssg08") || has("scar20") || has("g3sg1"))
+                        activeGroup = 4;
+                    else if (has("nova") || has("xm1014") || has("mag7") || has("sawedoff"))
+                        activeGroup = 3;
+                    else if (has("mp9") || has("mac10") || has("mp7") || has("mp5") || has("ump45") || has("p90") || has("bizon"))
+                        activeGroup = 1;
+                    else if (has("ak47") || has("m4a1") || has("aug") || has("sg556") || has("sg553") || has("galil") || has("famas"))
+                        activeGroup = 2;
+                    else if (has("negev") || has("m249"))
+                        activeGroup = 5;
+                    else if (has("knife") || has("bayonet") || has("grenade") || has("flashbang") || has("molotov") ||
+                             has("smoke") || has("decoy") || has("incgrenade") || has("c4") || has("taser") || has("healthshot"))
+                        activeGroup = -1;
+                    else
+                        activeGroup = 0;
                 }
             }
         }

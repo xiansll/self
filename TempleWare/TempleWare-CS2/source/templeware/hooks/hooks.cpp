@@ -26,6 +26,8 @@ extern bool g_showMenu; // defined in main.cpp (global scope)
 
 #include "../config/config.h"
 #include "../interfaces/interfaces.h"
+#include "../utils/filelog/filelog.h"
+#include "../runtime_gate.h"
 #include "../features/aim/aim.h"
 #include "../features/aim/legit_cmd.h"
 #include "../features/movement/movement.h"
@@ -138,35 +140,39 @@ void* __fastcall H::hkOnLevelShutdown(void* a1, const char* map_name)
 	g_local_player_cache->reset();
 	Validation::OnLocalPlayerCacheReset();
 
+	RuntimeGate::Reset("level_shutdown");
+
 	return original(a1, map_name);
 }
 
 void __fastcall H::hkCreateMove(CCSGOInput* rcx, int slot, bool active)
 {
 	static auto original = CreateMove.GetOriginal();
+	if (!original) return;
+
+	{ static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[CM] ENTER"); }
+
 	original(rcx, slot, active);
 
-	C_CSPlayerPawn* pLocalPawn = g_ctx->local_pawn;
-	if (!pLocalPawn || pLocalPawn->m_iHealth() <= 0)
-		return;
+	{ static ULONGLONG t = 0; RuntimeGate::LogOnce(t, "[CM] ORIGINAL_RETURNED"); }
 
-	CCSPlayerController* pLocalController = I::GameEntity->Instance->Get<CCSPlayerController>(pLocalPawn->m_hController().index());
-	if (!pLocalController)
-		return;
+	// Runtime gate: fresh SDK snapshot + 3-tick stability requirement.
+	// All features below are gated — during loading only original runs.
+	auto tick = RuntimeGate::Evaluate(rcx);
+	if (!tick.valid) return;
 
-	CUserCmd* user_cmd = I::Input->get_user_cmd(pLocalController);
+	CUserCmd* user_cmd = tick.cmd;
+	auto* cmdBase = user_cmd->csgoUserCmd.mutable_base();
 
-	Vector_t viewAngle = { user_cmd->csgoUserCmd.mutable_base()->viewangles().x(), user_cmd->csgoUserCmd.mutable_base()->viewangles().y(), user_cmd->csgoUserCmd.mutable_base()->viewangles().z() };
+	Vector_t viewAngle = { cmdBase->viewangles().x(), cmdBase->viewangles().y(), cmdBase->viewangles().z() };
 
 	g_movement->OnCreateMove(user_cmd, viewAngle);
 	g_antiaim->OnCreateMove(user_cmd);
 
-	// Legit aimbot + triggerbot + RCS via CUserCmd (replaces memory writes + mouse_event)
 	LegitCmd::OnCreateMove(user_cmd, rcx);
 
 	g_prediction->Start(user_cmd);
 	{
-		// Rage execution via CUserCmd (proper path — replaces memory writes)
 		const auto& plan = RageDryRun::g_state.action;
 		if (plan.execution_enabled && plan.target_found && RageDryRun::Live::g_enabled)
 		{
@@ -179,14 +185,17 @@ void __fastcall H::hkCreateMove(CCSGOInput* rcx, int slot, bool active)
 
 	g_movement->MovementFix(user_cmd, viewAngle);
 
-	if (user_cmd->csgoUserCmd.mutable_base()->forwardmove() > 0.f)
+	cmdBase = user_cmd->csgoUserCmd.mutable_base();
+	if (!cmdBase) return;
+
+	if (cmdBase->forwardmove() > 0.f)
 		user_cmd->nButtons.nValue |= IN_FORWARD;
-	else if (user_cmd->csgoUserCmd.mutable_base()->forwardmove() < 0.f)
+	else if (cmdBase->forwardmove() < 0.f)
 		user_cmd->nButtons.nValue |= IN_BACK;
 
-	if (user_cmd->csgoUserCmd.mutable_base()->leftmove() > 0.f)
+	if (cmdBase->leftmove() > 0.f)
 		user_cmd->nButtons.nValue |= IN_MOVELEFT;
-	else if (user_cmd->csgoUserCmd.mutable_base()->leftmove() < 0.f)
+	else if (cmdBase->leftmove() < 0.f)
 		user_cmd->nButtons.nValue |= IN_MOVERIGHT;
 }
 

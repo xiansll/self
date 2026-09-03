@@ -75,8 +75,16 @@ public:
 		typedef uintptr_t(__fastcall* get_controller_cmd_fn)(uintptr_t, uintptr_t);
 		static get_controller_cmd_fn get_controller_cmd = (get_controller_cmd_fn)M::scan("client.dll", "40 53 48 83 EC 20 8B DA E8 ?? ?? ?? ?? 4C");
 
+		if (!get_local_controller_by_internal_id || !setup_cmd || !get_controller_cmd)
+			return nullptr;
+
 		auto controller = get_local_controller_by_internal_id(0);
-		return (CUserCmd*)get_controller_cmd(controller, setup_cmd(controller));
+		if (!controller) return nullptr;
+
+		auto cmd_index = setup_cmd(controller);
+		if (!cmd_index) return nullptr;
+
+		return (CUserCmd*)get_controller_cmd(controller, cmd_index);
 	}
 
 	// 85 D2 75 ? 48 63 81 ...
