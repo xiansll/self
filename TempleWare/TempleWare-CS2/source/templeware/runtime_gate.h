@@ -3,7 +3,8 @@
 // Split runtime readiness gates.
 //
 // Render gate:
-//   - updated from the proven Present/local-player snapshot
+//   - refreshed when Present asks whether rendering is ready
+//   - reads fresh entity-system pawn + controller pointers
 //   - requires stable pawn + controller pointers
 //   - never depends on CUserCmd/CreateMove
 //
@@ -30,6 +31,7 @@ namespace RuntimeGate
     inline int g_renderStableCount = 0;
     inline uintptr_t g_renderLastPawn = 0;
     inline uintptr_t g_renderLastCtrl = 0;
+    inline std::atomic<ULONGLONG> g_renderLastEvalMs{~0ull};
 
     inline std::atomic<bool> g_commandReady{false};
     inline int g_commandStableCount = 0;
@@ -59,6 +61,22 @@ namespace RuntimeGate
 
         __try { *out = I::EntitySystem->get_local_pawn(); }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+        return *out != nullptr;
+    }
+
+    inline bool TryGetLocalController(CCSPlayerController** out) noexcept
+    {
+        *out = nullptr;
+        if (!I::EntitySystem)
+            return false;
+
+        __try {
+            *out = reinterpret_cast<CCSPlayerController*>(
+                I::EntitySystem->get_local_controller());
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
         return *out != nullptr;
     }
 
@@ -256,6 +274,51 @@ namespace RuntimeGate
         return false;
     }
 
+    // Present calls IsReady() twice in the current render path. The millisecond
+    // stamp prevents both checks from counting as two separate stable frames.
+    inline bool EvaluateRenderFresh() noexcept
+    {
+        const ULONGLONG now = GetTickCount64();
+        const ULONGLONG previous =
+            g_renderLastEvalMs.exchange(now, std::memory_order_relaxed);
+        if (previous == now)
+            return g_renderReady.load(std::memory_order_relaxed);
+
+        if (!TryEngineReady()) {
+            ResetRender("engine");
+            LogRenderBlocked("[RENDER_GATE] engine");
+            return false;
+        }
+
+        C_CSPlayerPawn* pawn = nullptr;
+        if (!TryGetLocalPawn(&pawn)) {
+            ResetRender("pawn");
+            LogRenderBlocked("[RENDER_GATE] pawn");
+            return false;
+        }
+
+        CCSPlayerController* ctrl = nullptr;
+        if (!TryGetLocalController(&ctrl)) {
+            ResetRender("ctrl");
+            LogRenderBlocked("[RENDER_GATE] ctrl");
+            return false;
+        }
+
+        // A successful, exception-free schema read proves the pawn wrapper is
+        // usable. Zero health is allowed so ESP can remain available while dead.
+        int health = 0;
+        if (!TryGetHealth(pawn, &health) || health < 0 || health > 200) {
+            ResetRender("pawn_semantics");
+            LogRenderBlocked("[RENDER_GATE] pawn_semantics");
+            return false;
+        }
+
+        return EvaluateRender(
+            reinterpret_cast<uintptr_t>(pawn),
+            reinterpret_cast<uintptr_t>(ctrl),
+            true);
+    }
+
     struct TickResult {
         C_CSPlayerPawn* pawn = nullptr;
         CCSPlayerController* ctrl = nullptr;
@@ -388,10 +451,11 @@ namespace RuntimeGate
         return g_commandReady.load(std::memory_order_relaxed);
     }
 
-    // Backward-compatible command readiness query.
+    // Backward-compatible name used by the current Present render path.
+    // It refreshes only the render lane; command readiness stays independent.
     inline bool IsReady() noexcept
     {
-        return IsCommandReady();
+        return EvaluateRenderFresh();
     }
 
     inline void LogOnce(ULONGLONG& timer, const char* msg) noexcept
