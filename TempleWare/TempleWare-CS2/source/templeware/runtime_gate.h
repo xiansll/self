@@ -1,14 +1,18 @@
 #pragma once
 
-// Crash-safe runtime readiness gate.
+// Split runtime readiness gates.
 //
-// Features run ONLY after the gate is READY: entity system, pawn,
-// controller and user-cmd have been valid for kRequiredStableTicks
-// consecutive CreateMove calls with stable pointer values.
+// Render gate:
+//   - updated from the proven Present/local-player snapshot
+//   - requires stable pawn + controller pointers
+//   - never depends on CUserCmd/CreateMove
 //
-// The gate takes a FRESH snapshot each tick from the SDK (independent
-// of FrameStageNotify). On success it publishes validated pointers to
-// g_ctx so every consumer reads the same proven state.
+// Command gate:
+//   - updated only from CreateMove
+//   - additionally requires a valid CUserCmd and mutable_base
+//
+// This keeps rendering features alive even if the CreateMove hook is temporarily
+// unavailable, while command-mutating features remain protected.
 
 #include "interfaces/interfaces.h"
 #include "globals/globals.h"
@@ -22,189 +26,381 @@ namespace RuntimeGate
 {
     inline constexpr int kRequiredStableTicks = 3;
 
-    inline std::atomic<bool> g_ready{false};
-    inline int  g_stableCount   = 0;
-    inline uintptr_t g_lastPawn = 0;
-    inline uintptr_t g_lastCtrl = 0;
+    inline std::atomic<bool> g_renderReady{false};
+    inline int g_renderStableCount = 0;
+    inline uintptr_t g_renderLastPawn = 0;
+    inline uintptr_t g_renderLastCtrl = 0;
+
+    inline std::atomic<bool> g_commandReady{false};
+    inline int g_commandStableCount = 0;
+    inline uintptr_t g_commandLastPawn = 0;
+    inline uintptr_t g_commandLastCtrl = 0;
 
     // --- SEH-safe SDK wrappers (separate functions to avoid C2712) ---
+
+    inline bool TryEngineReady() noexcept
+    {
+        if (!I::EngineClient)
+            return false;
+
+        __try {
+            return I::EngineClient->connected() && I::EngineClient->in_game();
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
 
     inline bool TryGetLocalPawn(C_CSPlayerPawn** out) noexcept
     {
         *out = nullptr;
-        if (!I::EntitySystem) return false;
+        if (!I::EntitySystem)
+            return false;
+
         __try { *out = I::EntitySystem->get_local_pawn(); }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         return *out != nullptr;
     }
 
-    inline bool TryGetHealth(C_CSPlayerPawn* p, int* out) noexcept
+    inline bool TryGetHealth(C_CSPlayerPawn* pawn, int* out) noexcept
     {
         *out = 0;
-        __try { *out = p->m_iHealth(); }
+        if (!pawn)
+            return false;
+
+        __try { *out = pawn->m_iHealth(); }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         return true;
     }
 
-    inline bool TryGetController(C_CSPlayerPawn* p, CCSPlayerController** out) noexcept
+    inline bool TryGetController(C_CSPlayerPawn* pawn, CCSPlayerController** out) noexcept
     {
         *out = nullptr;
+        if (!pawn || !I::GameEntity || !I::GameEntity->Instance)
+            return false;
+
         __try {
-            auto h = p->m_hController();
-            *out = I::GameEntity->Instance->Get<CCSPlayerController>(h.index());
-        } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+            auto handle = pawn->m_hController();
+            *out = I::GameEntity->Instance->Get<CCSPlayerController>(handle.index());
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
         return *out != nullptr;
     }
 
-    inline bool TryGetUserCmd(CCSPlayerController* c, CUserCmd** out) noexcept
+    inline bool TryGetUserCmd(CCSGOInput* input, CCSPlayerController* controller,
+                              CUserCmd** out) noexcept
     {
         *out = nullptr;
-        __try { *out = I::Input->get_user_cmd(c); }
+        if (!input || !controller)
+            return false;
+
+        __try { *out = input->get_user_cmd(controller); }
         __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
         return *out != nullptr;
     }
 
-    // --- Rate-limited diagnostics (string-literal tags only) ---
+    inline bool TryHasMutableBase(CUserCmd* cmd) noexcept
+    {
+        if (!cmd)
+            return false;
 
-    inline void LogBlocked(const char* literal) noexcept
+        __try { return cmd->csgoUserCmd.mutable_base() != nullptr; }
+        __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+
+    inline bool IsPlausibleAddress(uintptr_t address) noexcept
+    {
+        return address >= 0x10000ull && address < 0x0000800000000000ull;
+    }
+
+    // --- Rate-limited diagnostics ---
+
+    inline void LogRenderBlocked(const char* literal) noexcept
     {
         static const char* s_last = nullptr;
-        static ULONGLONG   s_t    = 0;
-        ULONGLONG now = GetTickCount64();
+        static ULONGLONG s_t = 0;
+        const ULONGLONG now = GetTickCount64();
         if (literal != s_last || now - s_t > 1000) {
             s_last = literal;
-            s_t    = now;
+            s_t = now;
+            FileLog::Log(literal);
+        }
+    }
+
+    inline void LogCommandBlocked(const char* literal) noexcept
+    {
+        static const char* s_last = nullptr;
+        static ULONGLONG s_t = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (literal != s_last || now - s_t > 1000) {
+            s_last = literal;
+            s_t = now;
             FileLog::Log(literal);
         }
     }
 
     // --- State management ---
 
-    inline void Reset(const char* reason) noexcept
+    inline void ResetRender(const char* reason) noexcept
     {
-        bool was = g_ready.exchange(false);
-        g_stableCount = 0;
-        g_lastPawn = 0;
-        g_lastCtrl = 0;
-        g_ctx->local_pawn       = nullptr;
-        g_ctx->local_controller = nullptr;
-        g_ctx->user_cmd         = nullptr;
-        if (was) {
+        const bool wasReady = g_renderReady.exchange(false);
+        g_renderStableCount = 0;
+        g_renderLastPawn = 0;
+        g_renderLastCtrl = 0;
+
+        if (g_ctx) {
+            g_ctx->local_pawn = nullptr;
+            g_ctx->local_controller = nullptr;
+        }
+
+        if (wasReady) {
             char buf[128];
-            std::snprintf(buf, sizeof(buf), "[GATE] RESET reason=%s", reason);
+            std::snprintf(buf, sizeof(buf), "[RENDER_GATE] RESET reason=%s", reason);
             FileLog::Log(buf);
         }
     }
 
+    inline void ResetCommand(const char* reason) noexcept
+    {
+        const bool wasReady = g_commandReady.exchange(false);
+        g_commandStableCount = 0;
+        g_commandLastPawn = 0;
+        g_commandLastCtrl = 0;
+
+        if (g_ctx)
+            g_ctx->user_cmd = nullptr;
+
+        if (wasReady) {
+            char buf[128];
+            std::snprintf(buf, sizeof(buf), "[CMD_GATE] RESET reason=%s", reason);
+            FileLog::Log(buf);
+        }
+    }
+
+    inline void Reset(const char* reason) noexcept
+    {
+        ResetRender(reason);
+        ResetCommand(reason);
+    }
+
+    // Called from Present after LocalPlayerCache publishes its validated snapshot.
+    // Rendering features intentionally do not depend on user_cmd/CreateMove.
+    inline bool EvaluateRender(uintptr_t pawnAddress, uintptr_t ctrlAddress,
+                               bool sourceTrusted) noexcept
+    {
+        if (!TryEngineReady()) {
+            ResetRender("engine");
+            LogRenderBlocked("[RENDER_GATE] engine");
+            return false;
+        }
+
+        if (!sourceTrusted) {
+            ResetRender("snapshot_untrusted");
+            LogRenderBlocked("[RENDER_GATE] snapshot_untrusted");
+            return false;
+        }
+
+        if (!IsPlausibleAddress(pawnAddress) || !IsPlausibleAddress(ctrlAddress)) {
+            ResetRender("local_pointer");
+            LogRenderBlocked("[RENDER_GATE] local_pointer");
+            return false;
+        }
+
+        if (pawnAddress != g_renderLastPawn || ctrlAddress != g_renderLastCtrl) {
+            if (g_renderReady.exchange(false)) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                    "[RENDER_GATE] RESET reason=ptr_change pawn=%p ctrl=%p",
+                    reinterpret_cast<void*>(pawnAddress),
+                    reinterpret_cast<void*>(ctrlAddress));
+                FileLog::Log(buf);
+            }
+
+            g_renderLastPawn = pawnAddress;
+            g_renderLastCtrl = ctrlAddress;
+            g_renderStableCount = 1;
+        }
+        else if (g_renderStableCount < kRequiredStableTicks) {
+            ++g_renderStableCount;
+        }
+
+        if (g_ctx) {
+            g_ctx->local_pawn = reinterpret_cast<C_CSPlayerPawn*>(pawnAddress);
+            g_ctx->local_controller =
+                reinterpret_cast<CCSPlayerController*>(ctrlAddress);
+        }
+
+        if (g_renderStableCount >= kRequiredStableTicks) {
+            if (!g_renderReady.exchange(true)) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                    "[RENDER_GATE] READY pawn=%p ctrl=%p",
+                    reinterpret_cast<void*>(pawnAddress),
+                    reinterpret_cast<void*>(ctrlAddress));
+                FileLog::Log(buf);
+            }
+            return true;
+        }
+
+        static ULONGLONG s_warmingTimer = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - s_warmingTimer > 1000) {
+            s_warmingTimer = now;
+            char buf[80];
+            std::snprintf(buf, sizeof(buf), "[RENDER_GATE] warming %d/%d",
+                g_renderStableCount, kRequiredStableTicks);
+            FileLog::Log(buf);
+        }
+        return false;
+    }
+
     struct TickResult {
-        C_CSPlayerPawn*      pawn = nullptr;
+        C_CSPlayerPawn* pawn = nullptr;
         CCSPlayerController* ctrl = nullptr;
-        CUserCmd*            cmd  = nullptr;
+        CUserCmd* cmd = nullptr;
         bool valid = false;
     };
 
-    // Called from CreateMove AFTER original. Returns a valid result
-    // only when the gate has been READY for kRequiredStableTicks.
-    inline TickResult Evaluate(CCSGOInput* input) noexcept
+    // Called from CreateMove after original. Only command-mutating features depend
+    // on this result.
+    inline TickResult EvaluateCommand(CCSGOInput* input) noexcept
     {
-        TickResult r{};
+        TickResult result{};
 
-        // 1. Engine
-        if (!I::EngineClient || !I::EngineClient->connected()
-            || !I::EngineClient->in_game())
-        { Reset("engine"); LogBlocked("[GATE] engine"); return r; }
+        if (!TryEngineReady()) {
+            ResetCommand("engine");
+            LogCommandBlocked("[CMD_GATE] engine");
+            return result;
+        }
 
-        // 2. Entity system
-        if (!I::EntitySystem || !I::GameEntity || !I::GameEntity->Instance)
-        { Reset("entity_sys"); LogBlocked("[GATE] entity_sys"); return r; }
+        if (!I::EntitySystem || !I::GameEntity || !I::GameEntity->Instance) {
+            ResetCommand("entity_sys");
+            LogCommandBlocked("[CMD_GATE] entity_sys");
+            return result;
+        }
 
-        // 3. Fresh pawn
         C_CSPlayerPawn* pawn = nullptr;
-        if (!TryGetLocalPawn(&pawn))
-        { Reset("pawn"); LogBlocked("[GATE] pawn"); return r; }
+        if (!TryGetLocalPawn(&pawn)) {
+            ResetCommand("pawn");
+            LogCommandBlocked("[CMD_GATE] pawn");
+            return result;
+        }
 
-        // 4. Health
-        int hp = 0;
-        if (!TryGetHealth(pawn, &hp) || hp <= 0)
-        { Reset("dead"); LogBlocked("[GATE] dead"); return r; }
+        int health = 0;
+        if (!TryGetHealth(pawn, &health) || health <= 0) {
+            ResetCommand("dead");
+            LogCommandBlocked("[CMD_GATE] dead");
+            return result;
+        }
 
-        // 5. Controller
         CCSPlayerController* ctrl = nullptr;
-        if (!TryGetController(pawn, &ctrl))
-        { Reset("ctrl"); LogBlocked("[GATE] ctrl"); return r; }
-
-        // 6. Input / user-cmd
-        if (!I::Input)
-        { Reset("input"); LogBlocked("[GATE] input"); return r; }
+        if (!TryGetController(pawn, &ctrl)) {
+            ResetCommand("ctrl");
+            LogCommandBlocked("[CMD_GATE] ctrl");
+            return result;
+        }
 
         CUserCmd* cmd = nullptr;
-        if (!TryGetUserCmd(ctrl, &cmd))
-        { Reset("cmd"); LogBlocked("[GATE] cmd"); return r; }
-
-        // 7. mutable_base
-        auto* base = cmd->csgoUserCmd.mutable_base();
-        if (!base)
-        { Reset("base"); LogBlocked("[GATE] base"); return r; }
-
-        // 8. Pointer stability
-        uintptr_t pa = reinterpret_cast<uintptr_t>(pawn);
-        uintptr_t ca = reinterpret_cast<uintptr_t>(ctrl);
-
-        if (pa != g_lastPawn || ca != g_lastCtrl) {
-            if (g_ready.exchange(false)) {
-                char buf[128];
-                std::snprintf(buf, sizeof(buf),
-                    "[GATE] RESET reason=ptr_change pawn=%p ctrl=%p",
-                    reinterpret_cast<void*>(pa), reinterpret_cast<void*>(ca));
-                FileLog::Log(buf);
-            }
-            g_lastPawn = pa;
-            g_lastCtrl = ca;
-            g_stableCount = 1;
-        } else {
-            g_stableCount++;
+        if (!TryGetUserCmd(input, ctrl, &cmd)) {
+            ResetCommand("cmd");
+            LogCommandBlocked("[CMD_GATE] cmd");
+            return result;
         }
 
-        // Publish fresh snapshot to central context every valid tick
-        g_ctx->local_pawn       = pawn;
-        g_ctx->local_controller = ctrl;
+        if (!TryHasMutableBase(cmd)) {
+            ResetCommand("base");
+            LogCommandBlocked("[CMD_GATE] base");
+            return result;
+        }
 
-        // 9. Readiness
-        if (g_stableCount >= kRequiredStableTicks) {
-            if (!g_ready.exchange(true)) {
-                char buf[128];
+        const uintptr_t pawnAddress = reinterpret_cast<uintptr_t>(pawn);
+        const uintptr_t ctrlAddress = reinterpret_cast<uintptr_t>(ctrl);
+
+        if (pawnAddress != g_commandLastPawn || ctrlAddress != g_commandLastCtrl) {
+            if (g_commandReady.exchange(false)) {
+                char buf[160];
                 std::snprintf(buf, sizeof(buf),
-                    "[GATE] READY pawn=%p ctrl=%p hp=%d",
-                    reinterpret_cast<void*>(pa), reinterpret_cast<void*>(ca), hp);
+                    "[CMD_GATE] RESET reason=ptr_change pawn=%p ctrl=%p",
+                    reinterpret_cast<void*>(pawnAddress),
+                    reinterpret_cast<void*>(ctrlAddress));
                 FileLog::Log(buf);
             }
-            r.pawn = pawn;
-            r.ctrl = ctrl;
-            r.cmd  = cmd;
-            r.valid = true;
-        } else {
-            static ULONGLONG s_wt = 0;
-            ULONGLONG now = GetTickCount64();
-            if (now - s_wt > 1000) {
-                s_wt = now;
-                char buf[64];
+
+            g_commandLastPawn = pawnAddress;
+            g_commandLastCtrl = ctrlAddress;
+            g_commandStableCount = 1;
+        }
+        else if (g_commandStableCount < kRequiredStableTicks) {
+            ++g_commandStableCount;
+        }
+
+        if (g_ctx) {
+            g_ctx->local_pawn = pawn;
+            g_ctx->local_controller = ctrl;
+            g_ctx->user_cmd = cmd;
+        }
+
+        if (g_commandStableCount >= kRequiredStableTicks) {
+            if (!g_commandReady.exchange(true)) {
+                char buf[176];
                 std::snprintf(buf, sizeof(buf),
-                    "[GATE] warming %d/%d", g_stableCount, kRequiredStableTicks);
+                    "[CMD_GATE] READY pawn=%p ctrl=%p hp=%d",
+                    reinterpret_cast<void*>(pawnAddress),
+                    reinterpret_cast<void*>(ctrlAddress), health);
+                FileLog::Log(buf);
+            }
+
+            result.pawn = pawn;
+            result.ctrl = ctrl;
+            result.cmd = cmd;
+            result.valid = true;
+        }
+        else {
+            static ULONGLONG s_warmingTimer = 0;
+            const ULONGLONG now = GetTickCount64();
+            if (now - s_warmingTimer > 1000) {
+                s_warmingTimer = now;
+                char buf[80];
+                std::snprintf(buf, sizeof(buf), "[CMD_GATE] warming %d/%d",
+                    g_commandStableCount, kRequiredStableTicks);
                 FileLog::Log(buf);
             }
         }
 
-        return r;
+        return result;
     }
 
-    // Convenience: is the gate ready? (for Present-side gating)
-    inline bool IsReady() noexcept { return g_ready.load(std::memory_order_relaxed); }
+    // Backward-compatible name used by the current CreateMove hook.
+    inline TickResult Evaluate(CCSGOInput* input) noexcept
+    {
+        return EvaluateCommand(input);
+    }
 
-    // Rate-limited checkpoint log helper
+    inline bool IsRenderReady() noexcept
+    {
+        return g_renderReady.load(std::memory_order_relaxed);
+    }
+
+    inline bool IsCommandReady() noexcept
+    {
+        return g_commandReady.load(std::memory_order_relaxed);
+    }
+
+    // Backward-compatible command readiness query.
+    inline bool IsReady() noexcept
+    {
+        return IsCommandReady();
+    }
+
     inline void LogOnce(ULONGLONG& timer, const char* msg) noexcept
     {
-        ULONGLONG now = GetTickCount64();
-        if (now - timer > 1000) { timer = now; FileLog::Log(msg); }
+        const ULONGLONG now = GetTickCount64();
+        if (now - timer > 1000) {
+            timer = now;
+            FileLog::Log(msg);
+        }
     }
 
 } // namespace RuntimeGate
