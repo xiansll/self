@@ -4,6 +4,9 @@
 
 #include <minwindef.h>
 #include <cmath>
+#include <cctype>
+#include <cstring>
+#include <string>
 
 struct hsv_t
 {
@@ -155,13 +158,21 @@ public:
 		return !( *this == a );
 	}
 
-	static Color lerp( const Color& a , const Color& b , float t ) noexcept
+	static Color lerp( const Color& from , const Color& to , float t ) noexcept
 	{
+		const auto mix = [t]( BYTE first , BYTE second ) -> int
+		{
+			return static_cast<int>(
+				static_cast<float>( first ) +
+				( static_cast<float>( second ) - static_cast<float>( first ) ) * t
+			);
+		};
+
 		return Color(
-			static_cast<int>( std::lerp( a.r , b.r , t ) ) ,
-			static_cast<int>( std::lerp( a.g , b.g , t ) ) ,
-			static_cast<int>( std::lerp( a.b , b.b , t ) ) ,
-			static_cast<int>( std::lerp( a.a , b.a , t ) )
+			mix( from.r , to.r ) ,
+			mix( from.g , to.g ) ,
+			mix( from.b , to.b ) ,
+			mix( from.a , to.a )
 		);
 	}
 
@@ -170,7 +181,7 @@ public:
 	{
 		struct
 		{
-			byte r , g , b , a;
+			BYTE r , g , b , a;
 		};
 
 		uint32_t rgba = { 0 };
