@@ -79,12 +79,12 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LibraryPath>$(ProjectDir)\external\protobufs\lib;$(ProjectDir)\external\imgui;$(ProjectDir)\external\imgui\freetype;C:\Program Files %28x86%29\Microsoft DirectX SDK %28June 2010%29\Lib\x64;$(LibraryPath)</LibraryPath>
-    <IncludePath>$(ProjectDir)\external\protobufs\include;$(ProjectDir)\external\imgui\freetype\include;C:\Program Files %28x86%29\Microsoft DirectX SDK %28June 2010%29\Include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)\source\andro;$(ProjectDir)\external;$(ProjectDir)\external\protobufs\include;$(ProjectDir)\external\imgui\freetype\include;C:\Program Files %28x86%29\Microsoft DirectX SDK %28June 2010%29\Include;$(IncludePath)</IncludePath>
     <TargetName>TempleWare</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LibraryPath>$(ProjectDir)\external\protobufs\lib;$(ProjectDir)\external\imgui;$(ProjectDir)\external\imgui\freetype;C:\Program Files %28x86%29\Microsoft DirectX SDK %28June 2010%29\Lib\x64;$(LibraryPath)</LibraryPath>
-    <IncludePath>$(ProjectDir)\external\protobufs\include;$(ProjectDir)\external\imgui\freetype\include;C:\Program Files %28x86%29\Microsoft DirectX SDK %28June 2010%29\Include;$(IncludePath)</IncludePath>
+    <IncludePath>$(ProjectDir)\source\andro;$(ProjectDir)\external;$(ProjectDir)\external\protobufs\include;$(ProjectDir)\external\imgui\freetype\include;C:\Program Files %28x86%29\Microsoft DirectX SDK %28June 2010%29\Include;$(IncludePath)</IncludePath>
     <TargetName>TempleWare</TargetName>
     <OutDir>$(ProjectDir)..\x64\Release\</OutDir>
     <IntDir>$(ProjectDir)x64\Release\</IntDir>
@@ -231,6 +231,12 @@
     <ClCompile Include="source\cs2\vtables\usermessages.pb.cc" />
     <ClCompile Include="source\gui\gui.cpp" />
     <ClCompile Include="source\trace\trace.cpp" />
+    <ClCompile Include="source\andro\CS2\SDK\SDK.cpp" />
+    <ClCompile Include="source\andro\CS2\SDK\CFunctionList.cpp" />
+    <ClCompile Include="source\andro\CS2\CBasePattern.cpp" />
+    <ClCompile Include="source\andro\Common\MemoryEngine.cpp" />
+    <ClCompile Include="source\andro\Common\DevLog.cpp" />
+    <ClCompile Include="source\andro\CS2\SDK\Interface\Interface.cpp" />
     <ClCompile Include="source\icons\icons.cpp" />
     <ClCompile Include="source\templeware\templeware.cpp" />
     <ClCompile Include="source\templeware\config\config.cpp" />

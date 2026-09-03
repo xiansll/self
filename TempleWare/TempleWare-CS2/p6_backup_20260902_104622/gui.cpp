@@ -1,23 +1,27 @@
 ﻿#include "gui.h"
+#include "nexus_body_embedded.h"
 #include "../esp/esp.h"
 #include "../trace/trace.h"
 #include "../icons/icons.h"
 #include "../templeware/config/gui_config.h"
 #include "../templeware/config/config.h"
 #include "../templeware/features/skinchanger/skinchanger.h"
-#include "../templeware/rage/rage_validation.h"
 
 #include "../../external/imgui/imgui.h"
 #include "../nerv/nerv_bridge.h"
 #include "../../external/imgui/imgui_impl_dx11.h"
 
 #include <windows.h>
+#include <wincodec.h>
 #include <unordered_map>
 #include <vector>
 #include <string>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+
+#pragma comment(lib, "windowscodecs.lib")
+extern ID3D11Device* g_pDevice;
 
 // =====================================================================
 //  NEXUS â€” fully custom-drawn UI (ImGui used only as the vertex batcher)
@@ -30,15 +34,15 @@ namespace
     ImVec4 Lerp4(const ImVec4& a, const ImVec4& b, float t) { return ImVec4(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t); }
     ImVec4 WithA(ImVec4 c, float a) { c.w = a; return c; }
 
-    ImVec4 g_accent = RGBA(245, 130, 30);
-    const ImVec4 BG0   = RGBA(13, 13, 15);
-    const ImVec4 BG1   = RGBA(20, 20, 24);
-    const ImVec4 CARD  = RGBA(26, 26, 31);
-    const ImVec4 FRAME = RGBA(34, 34, 41);
-    const ImVec4 BORDER= RGBA(40, 40, 47);
-    const ImVec4 TEXT  = RGBA(238, 238, 242);
-    const ImVec4 DIM   = RGBA(120, 120, 130);
-    const ImVec4 GREEN = RGBA(90, 210, 120);
+    ImVec4 g_accent = RGBA(255, 126, 8);
+    const ImVec4 BG0   = RGBA(10, 12, 16);
+    const ImVec4 BG1   = RGBA(14, 16, 21);
+    const ImVec4 CARD  = RGBA(19, 22, 28);
+    const ImVec4 FRAME = RGBA(28, 31, 39);
+    const ImVec4 BORDER= RGBA(39, 43, 53);
+    const ImVec4 TEXT  = RGBA(239, 241, 245);
+    const ImVec4 DIM   = RGBA(132, 139, 151);
+    const ImVec4 GREEN = RGBA(91, 205, 130);
 
     float g_uiScale = 1.0f;
     int   g_builtFontPx = -1;
@@ -330,7 +334,7 @@ namespace
     void ApplyStyle()
     {
         ImGuiStyle& s = ImGui::GetStyle();
-        s.WindowRounding = S(12.f); s.WindowBorderSize = 0.f; s.WindowPadding = ImVec2(0, 0);
+        s.WindowRounding = S(10.f); s.WindowBorderSize = 0.f; s.WindowPadding = ImVec2(0, 0);
         s.Colors[ImGuiCol_WindowBg] = BG0;
         s.Colors[ImGuiCol_Text] = TEXT;
     }
@@ -367,10 +371,10 @@ namespace Gui
         if (g_uiScale < 0.7f) g_uiScale = 0.7f; if (g_uiScale > 3.0f) g_uiScale = 3.0f;
 
         ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(12.f));
-        const ImVec2 defSize(S(1180.f), S(760.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, S(10.f));
+        const ImVec2 defSize(S(1380.f), S(820.f));
         ImGui::SetNextWindowSize(defSize, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(S(900.f), S(600.f)), ImVec2(6000, 4000));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(S(1080.f), S(680.f)), ImVec2(6000, 4000));
         if (g_needCenter)
         {
             const ImVec2 d = ImGui::GetIO().DisplaySize;
@@ -386,80 +390,75 @@ namespace Gui
         const ImVec2 ws = ImGui::GetWindowSize();
         RectF(wp, ImVec2(wp.x + ws.x, wp.y + ws.y), U32(BG0), S(12.f));
 
-        const float sideW = S(210.f);
+        const float sideW = S(190.f);
         const float pad = S(16.f);
 
-        // ============ SIDEBAR ============
+        
+// ============ SIDEBAR ============
         {
             const float sx = wp.x, sy = wp.y;
-            RectF(ImVec2(sx, sy), ImVec2(sx + sideW, wp.y + ws.y), U32(BG1), S(12.f));
+            RectF(ImVec2(sx, sy), ImVec2(sx + sideW, wp.y + ws.y), U32(BG1), S(10.f));
             RectF(ImVec2(sx + sideW - S(1.f), sy), ImVec2(sx + sideW, wp.y + ws.y), U32(BORDER));
 
-            // logo
-            Text(ImVec2(sx + S(24.f), sy + S(26.f)), U32(TEXT), "neXus");
-            // accent dot on the X
-            Text(ImVec2(sx + S(24.f), sy + S(48.f)), U32(g_accent), "CS2");
-            Text(ImVec2(sx + S(24.f) + TW("CS2 "), sy + S(48.f)), U32(DIM), "INTERNAL");
+            Text(ImVec2(sx + S(24.f), sy + S(22.f)), U32(TEXT), "neXus");
+            Text(ImVec2(sx + S(24.f), sy + S(45.f)), U32(g_accent), "CS2");
+            Text(ImVec2(sx + S(49.f), sy + S(45.f)), U32(DIM), "INTERNAL");
 
             const char* nav[] = { "Dashboard","Aimbot","Visuals","World","Movement","Inventory","Misc","Configs","Lua Scripts","Settings" };
-            const int navN = 10;
-            float ny = sy + S(90.f);
-            for (int i = 0; i < navN; ++i)
+            float ny = sy + S(88.f);
+            for (int i = 0; i < 10; ++i)
             {
                 char id[24]; std::snprintf(id, sizeof(id), "##nav%d", i);
-                const float ih = S(40.f);
-                const ImVec2 ip(sx + S(14.f), ny), isz(sideW - S(28.f), ih);
+                const float ih = S(42.f);
+                const ImVec2 ip(sx + S(12.f), ny), isz(sideW - S(24.f), ih);
                 bool hov = false;
-                if (Hit(id, ip, isz, hov)) g_nav = i, g_sub = 0;
+                if (Hit(id, ip, isz, hov)) { g_nav = i; g_sub = 0; }
                 const bool act = (g_nav == i);
-                const float aa = Anim(ImGui::GetID(id), act ? 1.f : 0.f, 12.f);
-                if (aa > 0.01f) { RectF(ip, ImVec2(ip.x + isz.x, ip.y + ih), U32(WithA(g_accent, 0.10f + 0.05f * aa)), S(7.f));
-                                  RectF(ip, ImVec2(ip.x + S(3.f), ip.y + ih), U32(g_accent), S(2.f)); }
-                else if (hov) RectF(ip, ImVec2(ip.x + isz.x, ip.y + ih), U32(WithA(TEXT, 0.05f)), S(7.f));
-                const ImVec4 tc = Lerp4(hov ? Lerp4(DIM, TEXT, 0.6f) : DIM, g_accent, aa);
-                Text(ImVec2(ip.x + S(44.f), ny + (ih - TH()) * 0.5f), U32(tc), nav[i]);
+                if (act || hov)
+                    RectF(ip, ImVec2(ip.x + isz.x, ip.y + ih),
+                          U32(act ? WithA(g_accent, 0.13f) : WithA(TEXT, 0.035f)), S(7.f));
+                if (act)
+                    RectF(ip, ImVec2(ip.x + S(3.f), ip.y + ih), U32(g_accent), S(2.f));
+
+                const ImVec4 tc = act ? g_accent : (hov ? TEXT : DIM);
                 NavIcon(i, ip.x + S(22.f), ny + ih * 0.5f, U32(tc));
-                ny += ih + S(4.f);
+                Text(ImVec2(ip.x + S(43.f), ny + (ih - TH()) * 0.5f), U32(tc), nav[i]);
+                ny += S(48.f);
             }
 
-            // bottom cards
-            const float by = wp.y + ws.y - S(150.f);
-            RectF(ImVec2(sx + S(14.f), by), ImVec2(sx + sideW - S(14.f), by + S(64.f)), U32(CARD), S(8.f));
-            Text(ImVec2(sx + S(26.f), by + S(12.f)), U32(DIM), "Subscription");
-            Text(ImVec2(sx + S(26.f), by + S(32.f)), U32(g_accent), "Premium");
-            Text(ImVec2(sx + S(26.f), by + S(52.f) - TH() * 0.2f), U32(DIM), "29 days remaining");
-            const float by2 = by + S(74.f);
-            RectF(ImVec2(sx + S(14.f), by2), ImVec2(sx + sideW - S(14.f), by2 + S(56.f)), U32(CARD), S(8.f));
-            Text(ImVec2(sx + S(26.f), by2 + S(10.f)), U32(DIM), "Build");
-            Text(ImVec2(sx + S(26.f), by2 + S(28.f)), U32(TEXT), "v1.0.7");
-            Text(ImVec2(sx + sideW - S(26.f) - TW("Latest"), by2 + S(30.f)), U32(GREEN), "Latest");
+            const float uy = wp.y + ws.y - S(74.f);
+            RectF(ImVec2(sx + S(12.f), uy), ImVec2(sx + sideW - S(12.f), uy + S(58.f)), U32(CARD), S(7.f));
+            Rect(ImVec2(sx + S(12.f), uy), ImVec2(sx + sideW - S(12.f), uy + S(58.f)), U32(BORDER), S(7.f));
+            DL()->AddCircleFilled(ImVec2(sx + S(34.f), uy + S(29.f)), S(14.f), U32(WithA(g_accent, 0.16f)));
+            Text(ImVec2(sx + S(57.f), uy + S(13.f)), U32(TEXT), "neXus User");
+            Text(ImVec2(sx + S(57.f), uy + S(34.f)), U32(g_accent), "Premium");
         }
 
-        // ============ TOPBAR ============
+        
+// ============ TOPBAR ============
         const float cx = wp.x + sideW;
         const float contentX = cx + pad;
         const float contentW = ws.x - sideW - pad * 2.f;
-        const float topH = S(64.f);
+        const float topH = S(66.f);
         {
-            // drag strip
-            bool hov = false;
             ImGui::SetCursorScreenPos(ImVec2(cx, wp.y));
             ImGui::InvisibleButton("##drag", ImVec2(ws.x - sideW, topH));
-            if (ImGui::IsItemActive()) { const ImVec2 d = ImGui::GetIO().MouseDelta; ImGui::SetWindowPos(ImVec2(wp.x + d.x, wp.y + d.y)); }
+            if (ImGui::IsItemActive()) {
+                const ImVec2 delta = ImGui::GetIO().MouseDelta;
+                ImGui::SetWindowPos(ImVec2(wp.x + delta.x, wp.y + delta.y));
+            }
 
-            const float ty = wp.y + S(20.f);
-            Text(ImVec2(contentX, ty - S(6.f)), U32(DIM), "Active Config");
-            // config box
-            static int cfgSel = 0; const char* cfgs[] = { "Legit HVH","Rage","Legit","Default" };
-            Combo("##cfg", contentX, ty + S(12.f), S(200.f), &cfgSel, cfgs, 4);
+            Text(ImVec2(contentX, wp.y + S(24.f)), U32(DIM), "NEXUS / CS2");
 
-            // right: status + user
-            const float rx = wp.x + ws.x - pad;
-            Text(ImVec2(rx - S(320.f), wp.y + S(18.f)), U32(TEXT), "Counter-Strike 2");
-            Text(ImVec2(rx - S(320.f), wp.y + S(36.f)), U32(GREEN), "Connected");
-            Text(ImVec2(rx - TW("neXus.user"), wp.y + S(18.f)), U32(TEXT), "neXus.user");
-            Text(ImVec2(rx - TW("Premium"), wp.y + S(36.f)), U32(g_accent), "Premium");
-            DL()->AddCircleFilled(ImVec2(rx - S(150.f), wp.y + topH * 0.5f), S(16.f), U32(FRAME));
+            const float sw = S(118.f), sh = S(30.f);
+            const float sx = wp.x + ws.x - pad - sw;
+            const float sy = wp.y + S(18.f);
+            RectF(ImVec2(sx,sy), ImVec2(sx+sw,sy+sh), U32(CARD), S(7.f));
+            Rect(ImVec2(sx,sy), ImVec2(sx+sw,sy+sh), U32(BORDER), S(7.f));
+            DL()->AddCircleFilled(ImVec2(sx+S(15.f), sy+sh*0.5f), S(4.f), U32(g_accent));
+            Text(ImVec2(sx+S(27.f),sy+S(7.f)), U32(DIM), "Injected");
+            Text(ImVec2(sx+sw-S(30.f),sy+S(7.f)), U32(g_accent), "CS2");
+
             RectF(ImVec2(cx, wp.y + topH - S(1.f)), ImVec2(wp.x + ws.x, wp.y + topH), U32(BORDER));
         }
 
@@ -650,102 +649,285 @@ namespace
     void EndScroll() { ImGui::PopClipRect(); }
 
     // ---- Anatomical human hitbox: SVG silhouette texture + rect hit regions ----
-    // Embedded fallback silhouette (used if the on-disk .svg is unavailable).
-    const char* kHumanSvg = R"SVG(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 430" width="200" height="430">
-<g fill="#1f2024" stroke="#c2701c" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
-<ellipse cx="100" cy="36" rx="24" ry="28"/>
-<path d="M89,58 h22 v16 q-11,6 -22,0 z"/>
-<path d="M54,86 C74,74 126,74 146,86 L136,172 C126,198 74,198 64,172 Z"/>
-<path d="M68,176 L132,176 L126,252 C126,266 74,266 74,252 Z"/>
-<path d="M62,88 C48,94 41,116 40,148 L56,150 C58,122 63,100 72,94 Z"/>
-<path d="M138,88 C152,94 159,116 160,148 L144,150 C142,122 137,100 128,94 Z"/>
-<path d="M40,146 C39,174 40,204 44,230 L58,228 C55,200 55,172 55,148 Z"/>
-<path d="M160,146 C161,174 160,204 156,230 L142,228 C145,200 145,172 145,148 Z"/>
-<ellipse cx="50" cy="238" rx="9" ry="12"/>
-<ellipse cx="150" cy="238" rx="9" ry="12"/>
-<path d="M76,252 C70,284 70,318 76,350 L97,348 C99,310 100,278 99,256 Z"/>
-<path d="M124,252 C130,284 130,318 124,350 L103,348 C101,310 100,278 101,256 Z"/>
-<path d="M78,348 C80,378 82,404 86,422 L100,420 C98,392 98,364 96,346 Z"/>
-<path d="M122,348 C120,378 118,404 114,422 L100,420 C102,392 102,364 104,346 Z"/>
-<path d="M84,418 L100,418 L100,428 L79,428 q-2,-6 5,-10 z"/>
-<path d="M116,418 L100,418 L100,428 L121,428 q2,-6 -5,-10 z"/>
-</g>
-<g stroke="#c2701c" stroke-width="1" stroke-opacity="0.45" fill="none" stroke-linecap="round">
-<line x1="100" y1="80" x2="100" y2="250"/>
-<line x1="70" y1="120" x2="130" y2="120"/>
-<line x1="74" y1="172" x2="126" y2="172"/>
-<line x1="74" y1="214" x2="126" y2="214"/>
-</g>
-</svg>)SVG";
+
+    struct BodyTexture
+    {
+        ID3D11ShaderResourceView* srv = nullptr;
+        int w = 0;
+        int h = 0;
+    };
+
+    std::vector<unsigned char> DecodeBase64(const char* s)
+    {
+        static const signed char lut[256] = {
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+            52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-2,-1,-1,
+            -1,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,
+            15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+            -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+            41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+            -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+        };
+
+        std::vector<unsigned char> out;
+        if (!s) return out;
+        unsigned int val = 0;
+        int valb = -8;
+        for (const unsigned char* p = reinterpret_cast<const unsigned char*>(s); *p; ++p)
+        {
+            const signed char c = lut[*p];
+            if (c == -1) continue;
+            if (c == -2) break;
+            val = (val << 6) | static_cast<unsigned int>(c);
+            valb += 6;
+            if (valb >= 0)
+            {
+                out.push_back(static_cast<unsigned char>((val >> valb) & 0xFF));
+                valb -= 8;
+            }
+        }
+        return out;
+    }
+
+    bool LoadPngTextureFromBase64(const char* encoded, BodyTexture& out)
+    {
+        if (out.srv) return true;
+        if (!g_pDevice || !encoded) return false;
+
+        const std::vector<unsigned char> bytes = DecodeBase64(encoded);
+        if (bytes.empty() || bytes.size() > 0xFFFFFFFFull) return false;
+
+        HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        (void)co;
+
+        IWICImagingFactory* factory = nullptr;
+        IWICStream* stream = nullptr;
+        IWICBitmapDecoder* decoder = nullptr;
+        IWICBitmapFrameDecode* frame = nullptr;
+        IWICFormatConverter* converter = nullptr;
+        ID3D11Texture2D* texture = nullptr;
+
+        auto cleanup = [&]() {
+            if (texture) texture->Release();
+            if (converter) converter->Release();
+            if (frame) frame->Release();
+            if (decoder) decoder->Release();
+            if (stream) stream->Release();
+            if (factory) factory->Release();
+        };
+
+        HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(&factory));
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        hr = factory->CreateStream(&stream);
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        hr = stream->InitializeFromMemory(
+            const_cast<BYTE*>(reinterpret_cast<const BYTE*>(bytes.data())),
+            static_cast<DWORD>(bytes.size()));
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        hr = factory->CreateDecoderFromStream(stream, nullptr, WICDecodeMetadataCacheOnLoad, &decoder);
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        hr = decoder->GetFrame(0, &frame);
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        UINT width = 0, height = 0;
+        hr = frame->GetSize(&width, &height);
+        if (FAILED(hr) || !width || !height) { cleanup(); return false; }
+
+        hr = factory->CreateFormatConverter(&converter);
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        hr = converter->Initialize(frame, GUID_WICPixelFormat32bppRGBA,
+                                   WICBitmapDitherTypeNone, nullptr, 0.0,
+                                   WICBitmapPaletteTypeCustom);
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        const UINT stride = width * 4;
+        std::vector<unsigned char> pixels(static_cast<size_t>(stride) * height);
+        hr = converter->CopyPixels(nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data());
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = width;
+        td.Height = height;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_IMMUTABLE;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+        D3D11_SUBRESOURCE_DATA sd{};
+        sd.pSysMem = pixels.data();
+        sd.SysMemPitch = stride;
+
+        hr = g_pDevice->CreateTexture2D(&td, &sd, &texture);
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC vd{};
+        vd.Format = td.Format;
+        vd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+        vd.Texture2D.MipLevels = 1;
+
+        hr = g_pDevice->CreateShaderResourceView(texture, &vd, &out.srv);
+        if (FAILED(hr)) { cleanup(); return false; }
+
+        out.w = static_cast<int>(width);
+        out.h = static_cast<int>(height);
+        cleanup();
+        return true;
+    }
+
+    bool PointInBodyPoly(float px, float py, const ImVec2* poly, int count)
+    {
+        bool inside = false;
+        for (int i = 0, j = count - 1; i < count; j = i++)
+        {
+            const ImVec2& a = poly[i];
+            const ImVec2& b = poly[j];
+            const bool cross = ((a.y > py) != (b.y > py)) &&
+                (px < (b.x - a.x) * (py - a.y) / ((b.y - a.y) + 0.00001f) + a.x);
+            if (cross) inside = !inside;
+        }
+        return inside;
+    }
+
+    int BodyRegionAt(float px, float py)
+    {
+        // Coordinates are in the original 1024x1535 image.
+        const float hx = (px - 512.f) / 82.f;
+        const float hy = (py - 125.f) / 107.f;
+        if (hx * hx + hy * hy <= 1.f) return 0;
+
+        static const ImVec2 neck[] = {
+            {455,205},{570,205},{572,290},{635,310},{610,335},{512,320},{414,335},{389,310},{452,290}
+        };
+        static const ImVec2 chest[] = {
+            {292,286},{390,282},{455,290},{512,306},{570,290},{635,282},{733,300},
+            {716,392},{650,442},{585,452},{512,429},{439,452},{374,442},{308,392}
+        };
+        static const ImVec2 stomach[] = {
+            {390,430},{438,451},{512,430},{586,451},{635,430},{626,655},{398,655}
+        };
+        static const ImVec2 pelvis[] = {
+            {398,650},{626,650},{615,770},{575,802},{512,790},{449,802},{409,770}
+        };
+        static const ImVec2 larm[] = {
+            {292,295},{370,315},{360,410},{326,478},{298,565},{273,656},{234,733},{224,797},
+            {255,861},{225,900},{177,887},{168,814},{197,740},{237,640},{260,548},{273,450},{284,360}
+        };
+        static const ImVec2 rarm[] = {
+            {732,295},{654,315},{664,410},{698,478},{726,565},{751,656},{790,733},{800,797},
+            {769,861},{799,900},{847,887},{856,814},{827,740},{787,640},{764,548},{751,450},{740,360}
+        };
+        static const ImVec2 lleg[] = {
+            {405,758},{512,785},{507,935},{488,1060},{455,1180},{432,1365},{414,1450},
+            {350,1482},{294,1468},{344,1365},{350,1210},{350,1075},{349,945},{360,830}
+        };
+        static const ImVec2 rleg[] = {
+            {512,785},{619,758},{664,830},{675,945},{674,1075},{674,1210},{680,1365},
+            {730,1468},{674,1482},{610,1450},{592,1365},{569,1180},{536,1060},{517,935}
+        };
+
+        if (PointInBodyPoly(px, py, neck, IM_ARRAYSIZE(neck))) return 1;
+        if (PointInBodyPoly(px, py, larm, IM_ARRAYSIZE(larm))) return 5;
+        if (PointInBodyPoly(px, py, rarm, IM_ARRAYSIZE(rarm))) return 6;
+        if (PointInBodyPoly(px, py, chest, IM_ARRAYSIZE(chest))) return 2;
+        if (PointInBodyPoly(px, py, stomach, IM_ARRAYSIZE(stomach))) return 3;
+        if (PointInBodyPoly(px, py, pelvis, IM_ARRAYSIZE(pelvis))) return 4;
+        if (PointInBodyPoly(px, py, lleg, IM_ARRAYSIZE(lleg))) return 7;
+        if (PointInBodyPoly(px, py, rleg, IM_ARRAYSIZE(rleg))) return 8;
+        return -1;
+    }
 
     void DrawHumanHitbox(float ox, float oy, float bw, float bh, int* sel)
     {
-        ImDrawList* d = DL();
+        static BodyTexture base;
+        static BodyTexture region[9];
+        static bool attempted = false;
 
-        // load the silhouette texture once: prefer the live file, else embedded.
-        static void* tex = nullptr; static int tw = 0, th = 0; static bool tried = false;
-        if (!tried)
+        if (!attempted)
         {
-            tex = Icons::LoadSvgFile("C:\\Dev\\CS2\\TempleWare-CS2-1.1.5\\TempleWare-CS2\\human_hitbox_tactical.svg", 430, &tw, &th);
-            if (!tex) tex = Icons::RasterSvgData("humanhb", kHumanSvg, 430, &tw, &th);
-            tried = true;
+            LoadPngTextureFromBase64(NexusBodyAsset::kBasePngB64, base);
+            const char* overlays[9] = {
+                NexusBodyAsset::kHeadPngB64,
+                NexusBodyAsset::kNeckPngB64,
+                NexusBodyAsset::kChestPngB64,
+                NexusBodyAsset::kStomachPngB64,
+                NexusBodyAsset::kPelvisPngB64,
+                NexusBodyAsset::kLeftArmPngB64,
+                NexusBodyAsset::kRightArmPngB64,
+                NexusBodyAsset::kLeftLegPngB64,
+                NexusBodyAsset::kRightLegPngB64
+            };
+            for (int i = 0; i < 9; ++i)
+                LoadPngTextureFromBase64(overlays[i], region[i]);
+            attempted = true;
         }
 
-        // body rect: fill the box height, preserve aspect, centre horizontally.
-        const float aspect = (th > 0) ? (float)tw / (float)th : 0.47f;
-        const float dw = bh * aspect;
-        const float dx = ox + (bw - dw) * 0.5f;
-        const ImVec2 a(dx, oy), b(dx + dw, oy + bh);
+        const float aspect = static_cast<float>(NexusBodyAsset::kWidth) /
+                             static_cast<float>(NexusBodyAsset::kHeight);
+        float drawH = bh;
+        float drawW = drawH * aspect;
+        if (drawW > bw)
+        {
+            drawW = bw;
+            drawH = drawW / aspect;
+        }
 
-        if (tex) d->AddImage((ImTextureID)tex, a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE);
-        else { RectF(a, b, U32(RGBA(31, 32, 36, 220)), S(6.f)); Rect(a, b, U32(WithA(g_accent, 0.4f)), S(6.f)); }
+        // UI fit: keep the exact body asset but render it 20% smaller.
+        drawW *= 0.80f;
+        drawH *= 0.80f;
 
-        // normalized rect hit regions (relative to the drawn body rect).
-        struct R { int reg; float x, y, w, h; };
-        static const R regs[] = {
-            { 0, 0.38f, 0.02f, 0.24f, 0.14f },  // head
-            { 1, 0.43f, 0.15f, 0.14f, 0.06f },  // neck
-            { 2, 0.28f, 0.20f, 0.44f, 0.20f },  // chest
-            { 3, 0.33f, 0.40f, 0.34f, 0.14f },  // stomach
-            { 4, 0.33f, 0.54f, 0.34f, 0.14f },  // pelvis
-            { 5, 0.14f, 0.19f, 0.20f, 0.40f },  // left arm
-            { 6, 0.66f, 0.19f, 0.20f, 0.40f },  // right arm
-            { 7, 0.34f, 0.58f, 0.16f, 0.42f },  // left leg
-            { 8, 0.50f, 0.58f, 0.16f, 0.42f },  // right leg
-        };
-        const int N = 9;
-        auto RS = [&](const R& r) { return ImVec4(dx + r.x * dw, oy + r.y * bh, dx + (r.x + r.w) * dw, oy + (r.y + r.h) * bh); };
+        const ImVec2 a(ox + (bw - drawW) * 0.5f, oy + (bh - drawH) * 0.5f);
+        const ImVec2 b(a.x + drawW, a.y + drawH);
 
-        bool hovBox = false;
-        Hit("##humanhb", ImVec2(ox, oy), ImVec2(bw, bh), hovBox);
-        const bool clicked = ImGui::IsItemClicked();
+        if (base.srv)
+            DL()->AddImage((ImTextureID)base.srv, a, b);
+        else
+        {
+            RectF(a, b, U32(RGBA(10, 10, 12)), S(6.f));
+            Text(ImVec2(a.x + S(12.f), a.y + S(12.f)), U32(DIM), "Body asset failed to load");
+        }
+
         const ImVec2 mp = ImGui::GetIO().MousePos;
-
-        // hover: priority head, neck, arms, chest, stomach, pelvis, legs.
-        const int prio[] = { 0, 1, 5, 6, 2, 3, 4, 7, 8 };
-        int hovReg = -1;
-        if (hovBox)
-            for (int i = 0; i < N; ++i)
-            {
-                const R& r = regs[prio[i]]; const ImVec4 s = RS(r);
-                if (mp.x >= s.x && mp.x <= s.z && mp.y >= s.y && mp.y <= s.w) { hovReg = r.reg; break; }
-            }
-        if (clicked && hovReg >= 0) *sel = hovReg;
-
-        // overlays: only the selected + hovered region (texture stays visible).
-        for (int i = 0; i < N; ++i)
+        int hovered = -1;
+        const bool inImage = mp.x >= a.x && mp.x <= b.x && mp.y >= a.y && mp.y <= b.y;
+        if (inImage)
         {
-            const R& r = regs[i]; const ImVec4 s = RS(r);
-            const bool seld = (*sel == r.reg);
-            const bool hov = (hovReg == r.reg);
-            if (!seld && !hov) continue;
-            const ImU32 fill = seld ? U32(WithA(g_accent, 0.30f)) : U32(WithA(g_accent, 0.15f));
-            RectF(ImVec2(s.x, s.y), ImVec2(s.z, s.w), fill, S(3.f));
-            if (seld) Rect(ImVec2(s.x, s.y), ImVec2(s.z, s.w), U32(WithA(g_accent, 0.85f)), S(3.f), S(1.3f));
+            const float px = (mp.x - a.x) / drawW * NexusBodyAsset::kWidth;
+            const float py = (mp.y - a.y) / drawH * NexusBodyAsset::kHeight;
+            hovered = BodyRegionAt(px, py);
         }
 
-        // selected region name under the figure.
-        const char* names[] = { "HEAD","NECK","CHEST","STOMACH","PELVIS","L.ARM","R.ARM","L.LEG","R.LEG" };
+        ImGui::SetCursorScreenPos(a);
+        ImGui::InvisibleButton("##exact_body_hitbox", ImVec2(drawW, drawH));
+        if (ImGui::IsItemClicked() && hovered >= 0)
+            *sel = hovered;
+
+        if (hovered >= 0 && hovered < 9 && hovered != *sel && region[hovered].srv)
+            DL()->AddImage((ImTextureID)region[hovered].srv, a, b,
+                           ImVec2(0,0), ImVec2(1,1), IM_COL32(255,255,255,115));
+
+        if (*sel >= 0 && *sel < 9 && region[*sel].srv)
+            DL()->AddImage((ImTextureID)region[*sel].srv, a, b);
+
+        const char* names[] = {
+            "HEAD","NECK","CHEST","STOMACH","PELVIS","L. ARM","R. ARM","L. LEG","R. LEG"
+        };
         if (*sel >= 0 && *sel < 9)
         {
             const char* nm = names[*sel];
@@ -796,74 +978,108 @@ namespace
     }
 
     // ---------------- AIMBOT ----------------
+    
     void PageAimbot(float x, float y, float w, float h)
     {
         auto& a = Esp::g_aimbot;
+        auto& t = Esp::g_trigger;
+
         PageTitle(x, y, "AIMBOT");
-        Text(ImVec2(x + S(30.f), y + S(22.f)), U32(DIM), "Legit aim assistance.");
+        Text(ImVec2(x + S(30.f), y + S(22.f)), U32(DIM), "Configure aim assistance and targeting preferences.");
 
         const float bodyY = y + S(58.f);
-        const float gap = S(16.f);
-        const float colW = (w - gap * 2.f) / 3.f;
-        const float c1 = x, c2 = c1 + colW + gap, c3 = c2 + colW + gap;
+        const float gap = S(14.f);
+        const float availableH = h - S(58.f);
 
-        // ACTIVATION (wired: Enable, Aim Key, Aim Type)
+        const float leftW = (std::max)(S(390.f), w * 0.41f);
+        const float rightX = x + leftW + gap;
+        const float rightW = w - leftW - gap;
+
+        BeginCard("HITBOX", x, bodyY, leftW, 3);
         {
-            BeginCard("ACTIVATION", c1, bodyY, colW, 0);
-            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
-            ry = RowToggle("Enable", ix, ry, iw, &a.enable);
+            const float ix = x + S(16.f);
+            Text(ImVec2(ix, CardBodyY()), U32(g_accent), "SELECTED");
+            const char* names[] = { "Head","Neck","Chest","Stomach","Pelvis","Left arm","Right arm","Left leg","Right leg" };
+            const char* nm = (a.hitbox >= 0 && a.hitbox < 9) ? names[a.hitbox] : "None";
+            Text(ImVec2(ix, CardBodyY() + S(20.f)), U32(TEXT), nm);
+            Text(ImVec2(ix, CardBodyY() + S(42.f)), U32(DIM), "Click a body region");
+
+            const float figureTop = bodyY + S(86.f);
+            const float figureBottom = bodyY + availableH - S(58.f);
+            const float figureH = figureBottom - figureTop;
+            const float figureW = leftW - S(116.f);
+            DrawHumanHitbox(x + S(94.f), figureTop, figureW, figureH, &a.hitbox);
+
+            const float qy = bodyY + availableH - S(48.f);
+            const float qx = x + S(16.f);
+            const float qgap = S(5.f);
+            const float qw = (leftW - S(32.f) - qgap * 4.f) / 5.f;
+            const char* qn[] = { "Head","Neck","Chest","Stomach","Pelvis" };
+            for (int i=0;i<5;++i) {
+                char id[24]; std::snprintf(id,sizeof(id),"##hbq%d",i);
+                if (Button(id, qx + i*(qw+qgap), qy, qw, S(30.f), qn[i], a.hitbox == i))
+                    a.hitbox = i;
+            }
+        }
+        EndCard(bodyY + availableH - S(14.f));
+
+        const float colGap = S(14.f);
+        const float colW = (rightW - colGap) * 0.5f;
+        const float topH = S(286.f);
+        const float row2 = bodyY + topH + gap;
+        const float bottomH = availableH - topH - gap;
+
+        BeginCard("TARGET SELECTION", rightX, bodyY, colW, 1);
+        {
+            float ry = CardBodyY();
+            const float ix = rightX + S(16.f), iw = colW - S(32.f);
+            const char* selection[] = { "FOV","Distance","Health" };
+            ry = RowCombo("Selection", ix, ry, iw, &a.selection, selection, 3);
+            const char* aimTypes[] = { "Hold","Toggle","Always" };
+            ry = RowCombo("Aim Type", ix, ry, iw, &a.aimType, aimTypes, 3);
             ry = RowKey("Aim Key", ix, ry, iw, &a.aimKey);
-            { const char* t[] = { "Hold","Toggle","Always" }; ry = RowCombo("Aim Type", ix, ry, iw, &a.aimType, t, 3); }
-            // TODO (not wired yet): Fire Key, Silent Aim
-            EndCard(ry);
+            ry = RowToggle("Enabled##aim", ix, ry, iw, &a.enable);
+            ry = RowToggle("Silent", ix, ry, iw, &a.silent);
+            ry = RowToggle("Prefer Body", ix, ry, iw, &a.preferBody);
         }
-        // TARGETING (wired: FOV, Smooth)
-        {
-            BeginCard("TARGETING", c2, bodyY, colW, 1);
-            float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
-            ry = RowSlider("FOV", ix, ry, iw, &a.fov, 0.f, 30.f, "%.1f");
-            ry = RowToggleC("Draw FOV", ix, ry, iw, &a.drawFov, a.fovColor);
-            ry = RowSlider("Smooth", ix, ry, iw, &a.smooth, 0.f, 1.f, "%.2f");
-            // TODO (not wired yet): Selection, Minimum Damage, Hit Chance, Multipoint
-            EndCard(ry);
-        }
-        // HITBOX (wired: clickable hitbox selection)
-        {
-            const float cardH = S(250.f);
-            BeginCard("HITBOX", c3, bodyY, colW, 3);
-            // TODO (not wired yet): Hitbox Scale, Safe Points, Prefer Body Aim
-            const float bodyH = cardH * 0.82f;
-            const float bodyW = bodyH * 0.55f;
-            DrawHumanHitbox(c3 + (colW - bodyW) * 0.5f, bodyY + (cardH - bodyH) * 0.5f, bodyW, bodyH, &a.hitbox);
-            EndCard(bodyY + cardH - S(14.f));
-        }
+        EndCard(bodyY + topH - S(14.f));
 
-        // ACCURACY / RCS (wired: Recoil Control System, RCS X, RCS Y)
-        const float row2 = bodyY + S(266.f);
+        BeginCard("ACCURACY", rightX + colW + colGap, bodyY, colW, 2);
         {
-            BeginCard("ACCURACY / RCS", c1, row2, colW, 2);
-            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
-            ry = RowToggle("Recoil Control System", ix, ry, iw, &a.rcs);
+            float ry = CardBodyY();
+            const float ix = rightX + colW + colGap + S(16.f), iw = colW - S(32.f);
+            ry = RowSlider("FOV", ix, ry, iw, &a.fov, 0.f, 30.f, "%.1f");
+            ry = RowSlider("Smooth", ix, ry, iw, &a.smooth, 0.f, 1.f, "%.2f");
+            ry = RowSliderI("Hit Chance", ix, ry, iw, &a.hitChance, 0, 100, "%d%%");
+            ry = RowSliderI("Minimum Damage", ix, ry, iw, &a.minDamage, 0, 100, "%d");
+            ry = RowToggle("Multipoint", ix, ry, iw, &a.multipoint);
+        }
+        EndCard(bodyY + topH - S(14.f));
+
+        BeginCard("AIM / RCS", rightX, row2, colW, 1);
+        {
+            float ry = CardBodyY();
+            const float ix = rightX + S(16.f), iw = colW - S(32.f);
+            ry = RowToggle("Draw FOV", ix, ry, iw, &a.drawFov);
+            ry = RowToggle("Recoil Control", ix, ry, iw, &a.rcs);
             ry = RowSliderI("RCS X", ix, ry, iw, &a.rcsX, 0, 100, "%d%%");
             ry = RowSliderI("RCS Y", ix, ry, iw, &a.rcsY, 0, 100, "%d%%");
-            // TODO (not wired yet): Standalone RCS, Spread Limit, Automatic Stop
-            EndCard(ry);
+            ry = RowToggle("Auto Stop", ix, ry, iw, &a.autoStop);
+            ry = RowToggle("Safe Points", ix, ry, iw, &a.safePoints);
         }
-        // TRIGGERBOT (wired: Enable, Team Check, Delay; key is in Keybinds)
+        EndCard(row2 + bottomH - S(14.f));
+
+        BeginCard("TRIGGERBOT", rightX + colW + colGap, row2, colW, 1);
         {
-            auto& t = Esp::g_trigger;
-            BeginCard("TRIGGERBOT", c2, row2, colW, 1);
-            float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
-            ry = RowToggle("Enable##trig", ix, ry, iw, &t.enable);
+            float ry = CardBodyY();
+            const float ix = rightX + colW + colGap + S(16.f), iw = colW - S(32.f);
+            ry = RowToggle("Enabled##trig", ix, ry, iw, &t.enable);
             ry = RowToggle("Team Check", ix, ry, iw, &t.teamCheck);
+            ry = RowKey("Trigger Key", ix, ry, iw, &t.key);
             ry = RowSliderI("Delay (ms)", ix, ry, iw, &t.delayMs, 0, 250, "%d");
-            EndCard(ry);
+            ry = RowSlider("Hitbox Scale", ix, ry, iw, &a.hitboxScale, 0.25f, 1.0f, "%.2f");
         }
-
-        // TODO (not wired yet): ANTI-AIM card.
-
-        // Keybinds Overview strip (full width, bottom)
-        KeybindsStrip(x, row2 + S(160.f), w);
+        EndCard(row2 + bottomH - S(14.f));
     }
 
     // ---------------- VISUALS (our real ESP/chams/glow) ----------------
@@ -1163,202 +1379,25 @@ namespace
     // ---------------- SETTINGS ----------------
     void PageSettings(float x, float y, float w, float h)
     {
-        (void)h;
         PageTitle(x, y, "SETTINGS");
-
         const float bodyY = y + S(30.f);
-        const float pageX = x + S(20.f);
-        const float pageW = w - S(40.f);
-        const float interfaceW = S(360.f);
-
-        // ------------------------------------------------------------
-        // INTERFACE
-        // ------------------------------------------------------------
-        BeginCard("Interface", pageX, bodyY, interfaceW);
+        const float colW = S(360.f), ix = x + S(36.f), iw = colW - S(32.f);
+        BeginCard("Interface", x + S(20.f), bodyY, colW);
         float ry = CardBodyY();
-        const float ix = pageX + S(16.f);
-
         Label(ix, ry, "UI scale", U32(DIM));
-        float sc = g_uiScale;
-        Slider("##uisc",
-               ix + interfaceW - S(32.f) - S(160.f) - S(50.f),
-               ry, S(160.f), &sc, 0.7f, 3.0f, "%.2fx");
-        g_uiScale = sc;
+        float sc = g_uiScale; Slider("##uisc", ix + colW - S(32.f) - S(160.f) - S(50.f), ry, S(160.f), &sc, 0.7f, 3.0f, "%.2fx"); g_uiScale = sc;
         ry += S(34.f);
-
         Label(ix, ry + S(4.f), "Center window", U32(TEXT));
+        // simple button
         {
-            const float bx = ix + interfaceW - S(120.f) - S(16.f);
-            const float bw = S(120.f), bh = S(26.f);
+            const float bx = ix + colW - S(120.f) - S(16.f), bw = S(120.f), bh = S(26.f);
             bool bh2 = false;
-            if (Hit("##centerbtn", ImVec2(bx, ry), ImVec2(bw, bh), bh2))
-                g_needCenter = true;
-            RectF(ImVec2(bx, ry), ImVec2(bx + bw, ry + bh),
-                  U32(bh2 ? WithA(g_accent, 0.4f) : FRAME), S(5.f));
-            Text(ImVec2(bx + (bw - TW("Recenter")) * 0.5f,
-                        ry + (bh - TH()) * 0.5f), U32(TEXT), "Recenter");
+            if (Hit("##centerbtn", ImVec2(bx, ry), ImVec2(bw, bh), bh2)) g_needCenter = true;
+            RectF(ImVec2(bx, ry), ImVec2(bx + bw, ry + bh), U32(bh2 ? WithA(g_accent, 0.4f) : FRAME), S(5.f));
+            Text(ImVec2(bx + (bw - TW("Recenter")) * 0.5f, ry + (bh - TH()) * 0.5f), U32(TEXT), "Recenter");
         }
         ry += S(40.f);
         EndCard(ry);
-
-        // ------------------------------------------------------------
-        // DEBUG / VALIDATION
-        // Restored P6/P8/P9 diagnostics. These controls only exercise the
-        // existing dry-run/read-only validation paths; execution stays NO-OP.
-        // ------------------------------------------------------------
-        const float debugY = bodyY + S(145.f);
-        BeginCard("DEBUG / VALIDATION", pageX, debugY, pageW);
-        float dy = CardBodyY();
-        const float dix = pageX + S(16.f);
-        const float diw = pageW - S(32.f);
-        const float bgap = S(8.f);
-        const float bh = S(28.f);
-        const float bw = (diw - bgap * 3.f) * 0.25f;
-
-        if (Button("##rage_validate", dix, dy, bw, bh, "Validate", true))
-            RageDryRun::run_validation_suite();
-
-        if (Button("##rage_self_test", dix + (bw + bgap), dy,
-                   bw, bh, "Self Test", false))
-            RageDryRun::run_builtin_self_test();
-
-        if (Button("##rage_full_synth", dix + (bw + bgap) * 2.f, dy,
-                   bw, bh, "Full Synth", false))
-            RageDryRun::load_synthetic_demo();
-
-        if (Button("##rage_reset", dix + (bw + bgap) * 3.f, dy,
-                   bw, bh, "Reset", false))
-        {
-            RageDryRun::reset_state();
-            RageDryRun::RuntimeProviders::reset_runtime_state();
-            RageDryRun::g_validation = {};
-        }
-
-        dy += bh + S(12.f);
-
-        // Validation summary.
-        if (RageDryRun::g_validation.ran)
-        {
-            char b[160]{};
-            std::snprintf(b, sizeof(b), "VALIDATION: %s  %d/%d  (%lld us)",
-                          RageDryRun::g_validation.ok() ? "PASS" : "FAIL",
-                          RageDryRun::g_validation.passed,
-                          RageDryRun::g_validation.total,
-                          RageDryRun::g_validation.perf_us);
-            Text(ImVec2(dix, dy),
-                 RageDryRun::g_validation.ok() ? U32(GREEN) : U32(g_accent), b);
-            dy += S(20.f);
-
-            if (!RageDryRun::g_validation.ok() &&
-                RageDryRun::g_validation.first_fail[0])
-            {
-                std::snprintf(b, sizeof(b), "first fail: %s",
-                              RageDryRun::g_validation.first_fail);
-                Text(ImVec2(dix, dy), U32(g_accent), b);
-                dy += S(20.f);
-            }
-        }
-        else
-        {
-            Text(ImVec2(dix, dy), U32(DIM), "VALIDATION: NOT RUN");
-            dy += S(20.f);
-        }
-
-        // Self-test + evaluator status.
-        {
-            const auto& st = RageDryRun::g_state.self_test;
-            const bool stPass = st.ran && st.fov_selection_pass &&
-                                st.distance_selection_pass &&
-                                st.invisible_rejection_pass;
-            const auto& et = RageDryRun::g_state.evaluator_tests;
-
-            char b[160]{};
-            std::snprintf(b, sizeof(b), "Self Test: %s    Evaluators: %s",
-                          st.ran ? (stPass ? "PASS" : "FAIL") : "NOT RUN",
-                          et.ran ? (et.all() ? "PASS" : "FAIL") : "NOT RUN");
-            Text(ImVec2(dix, dy),
-                 (stPass && (!et.ran || et.all())) ? U32(GREEN) : U32(DIM), b);
-            dy += S(24.f);
-        }
-
-        // Readiness/runtime snapshot. Do not fake READY: display exactly what
-        // the existing providers currently report.
-        const auto& r = RageDryRun::g_state.readiness;
-        const auto src = RageDryRun::g_state.source;
-        const auto rt = RageDryRun::RuntimeProviders::get_runtime_diagnostics();
-
-        {
-            char b[192]{};
-            std::snprintf(b, sizeof(b), "Source: %s    entities=%d    generation=%llu",
-                          RageDryRun::source_name(src),
-                          RageDryRun::g_state.live_entity_count,
-                          static_cast<unsigned long long>(RageDryRun::g_state.generation));
-            Text(ImVec2(dix, dy), U32(TEXT), b);
-            dy += S(22.f);
-        }
-
-        auto readinessColor = [](RageDryRun::Readiness v) -> ImU32
-        {
-            if (v == RageDryRun::Readiness::Ready) return U32(GREEN);
-            if (v == RageDryRun::Readiness::Blocked) return U32(g_accent);
-            return U32(DIM);
-        };
-
-        // Two compact columns keep the card readable at smaller window sizes.
-        const float laneGap = S(24.f);
-        const float laneW = (diw - laneGap) * 0.5f;
-        float ly = dy;
-        float ry2 = dy;
-
-        auto lane = [&](float lx, float& yy, const char* name, RageDryRun::Readiness v)
-        {
-            char b[128]{};
-            std::snprintf(b, sizeof(b), "%-12s %s", name,
-                          RageDryRun::lane_label(v, src));
-            Text(ImVec2(lx, yy), readinessColor(v), b);
-            yy += S(19.f);
-        };
-
-        lane(dix, ly, "Frame", r.combat_frame);
-        lane(dix, ly, "Entities", r.entities);
-        lane(dix, ly, "Weapon", r.weapon);
-        lane(dix, ly, "Prediction", r.prediction);
-        lane(dix, ly, "Bones", r.bones);
-
-        const float col2 = dix + laneW + laneGap;
-        lane(col2, ry2, "Hitboxes", r.hitboxes);
-        lane(col2, ry2, "Trace", r.trace);
-        lane(col2, ry2, "Penetration", r.penetration);
-        lane(col2, ry2, "Command", r.command);
-
-        dy = (ly > ry2 ? ly : ry2) + S(4.f);
-
-        {
-            char b[192]{};
-            std::snprintf(b, sizeof(b),
-                          "Tick: %s  cur=%u  frac=%.2f    Trace runtime=%s",
-                          rt.tick_state_valid ? "READY" : "UNAVAILABLE",
-                          rt.current_tick, rt.current_subtick_frac,
-                          rt.trace_ready ? "READY" : "BLOCKED");
-            Text(ImVec2(dix, dy),
-                 rt.tick_state_valid ? U32(GREEN) : U32(DIM), b);
-            dy += S(20.f);
-
-            std::snprintf(b, sizeof(b),
-                          "Penetration runtime=%s    Execution=DISABLED",
-                          rt.penetration_active ? "READY" : "BLOCKED");
-            Text(ImVec2(dix, dy), U32(DIM), b);
-            dy += S(24.f);
-        }
-
-        // Manual status refresh only. Normal live capture can continue to
-        // update readiness elsewhere without this panel owning that lifecycle.
-        if (Button("##rage_refresh_status", dix, dy, S(132.f), bh,
-                   "Refresh Status", false))
-            RageDryRun::refresh_provider_readiness();
-        dy += bh;
-
-        EndCard(dy);
     }
 
     void PageSimple(const char* title, float x, float y, float w, float h)

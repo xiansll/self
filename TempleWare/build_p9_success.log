@@ -1,0 +1,168 @@
+﻿MSBuild version 18.9.1+a81b43525 for .NET Framework
+Build started 9/2/2026 7:08:01 PM.
+
+Project "C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj" on node 1 (Rebuild target(s)).
+_PrepareForClean:
+  Deleting file "C:\CS\TempleWare\TempleWare-CS2\x64\Release\TempleWare-CS2.tlog\TempleWare-CS2.lastbuildstate".
+PrepareForBuild:
+  Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
+InitializeBuildStatus:
+  Touching "C:\CS\TempleWare\TempleWare-CS2\x64\Release\TempleWare-CS2.tlog\unsuccessfulbuild".
+ComputeStdModulesCompileInputs:
+  Reading library manifest file 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\modules\modules.json' which provides data for library 'microsoft/STL'.
+  Adding module source 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\modules\std.ixx' from library 'microsoft/STL' to be built with this project.
+  Adding module source 'C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\modules\std.compat.ixx' from library 'microsoft/STL' to be built with this project.
+ClCompile:
+  C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\bin\HostX64\x64\CL.exe /c /Zi /nologo /W0 /WX- /diagnostics:column /sdl /MP /O2 /Oi /GL /D TEMPLEWARE_EXPORTS /D _WINDLL /D _MBCS /Gm- /EHsc /MD /GS /Gy /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /std:c++20 /permissive- /Fo"C:\CS\TempleWare\TempleWare-CS2\x64\Release\\" /Fd"C:\CS\TempleWare\TempleWare-CS2\x64\Release\vc145.pdb" /external:W0 /Gd /TP /FC /errorReport:queue external\imgui\imgui.cpp external\imgui\imgui_draw.cpp external\imgui\imgui_impl_dx11.cpp external\imgui\imgui_impl_win32.cpp external\imgui\imgui_widgets.cpp external\kiero\kiero.cpp source\cs2\datatypes\cutlbuffer\cutlbuffer.cpp source\cs2\datatypes\keyvalues\keyvalues.cpp source\cs2\entity\CCSPlayerController\CCSPlayerController.cpp source\cs2\entity\C_CSPlayerPawn\C_CSPlayerPawn.cpp source\cs2\entity\C_CSWeaponBase\C_CSWeaponBase.cpp source\cs2\entity\C_BaseEntity\C_BaseEntity.cpp source\cs2\entity\C_EntitySystem\entity.cpp source\main.cpp source\esp\esp.cpp source\chams\chams.cpp source\cs2\vtables\cs_usercmd.pb.cc source\cs2\vtables\netmessages.pb.cc source\cs2\vtables\networkbasetypes.pb.cc source\cs2\vtables\network_connection.pb.cc source\cs2\vtables\source2_steam_stats.pb.cc source\cs2\vtables\usercmd.pb.cc source\cs2\vtables\usermessages.pb.cc source\gui\gui.cpp source\trace\trace.cpp source\icons\icons.cpp source\templeware\templeware.cpp source\templeware\config\config.cpp source\templeware\hooks\hooks.cpp source\templeware\menu\menu.cpp source\templeware\menu\hud.cpp source\templeware\keybinds\keybinds.cpp source\templeware\interfaces\CGameEntitySystem\CGameEntitySystem.cpp source\templeware\interfaces\interfaces.cpp source\templeware\utils\logging\log.cpp source\templeware\utils\localplayer\localplayer.cpp source\templeware\utils\validation\validation.cpp source\templeware\utils\filelog\filelog.cpp source\templeware\utils\math\math.cpp source\templeware\utils\math\vector\vector.cpp source\templeware\utils\math\viewmatrix\viewmatrix.cpp source\templeware\utils\memory\gaa\gaa.cpp source\templeware\utils\memory\patternscan\patternscan.cpp source\templeware\utils\module\module.cpp source\templeware\players\hook\playerHook.cpp source\templeware\players\players.cpp source\templeware\features\aim\aim.cpp source\templeware\features\movement\movement.cpp source\templeware\features\prediction\prediction.cpp source\templeware\features\rage\antiaim.cpp source\templeware\features\spectatorlist\spectatorlist.cpp source\templeware\features\visuals\visuals.cpp source\templeware\features\visuals\antiflash\antiflash.cpp source\templeware\features\visuals\fov\fov.cpp source\templeware\features\world\world.cpp source\templeware\utils\schema\schema.cpp source\templeware\features\skinchanger\econ_item_system.cpp source\templeware\features\skinchanger\features.cpp
+  imgui.cpp
+  imgui_draw.cpp
+  imgui_impl_dx11.cpp
+  imgui_impl_win32.cpp
+  imgui_widgets.cpp
+  kiero.cpp
+  cutlbuffer.cpp
+  keyvalues.cpp
+  CCSPlayerController.cpp
+  C_CSPlayerPawn.cpp
+  C_CSWeaponBase.cpp
+  C_BaseEntity.cpp
+  entity.cpp
+  main.cpp
+  esp.cpp
+  chams.cpp
+  cs_usercmd.pb.cc
+  netmessages.pb.cc
+  networkbasetypes.pb.cc
+  network_connection.pb.cc
+  source2_steam_stats.pb.cc
+  usercmd.pb.cc
+  usermessages.pb.cc
+  gui.cpp
+  trace.cpp
+  icons.cpp
+  templeware.cpp
+  config.cpp
+  hooks.cpp
+  menu.cpp
+  hud.cpp
+  keybinds.cpp
+  CGameEntitySystem.cpp
+  interfaces.cpp
+  log.cpp
+  localplayer.cpp
+  validation.cpp
+  filelog.cpp
+  math.cpp
+C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2214,13): error C2653: 'I': is not a class or namespace name [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2214,16): error C2065: 'GlobalVars': undeclared identifier [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2216,44): error C2653: 'I': is not a class or namespace name [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2216,47): error C2065: 'GlobalVars': undeclared identifier [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2217,17): error C2653: 'I': is not a class or namespace name [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2217,20): error C2065: 'GlobalVars': undeclared identifier [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2215,34): error C2660: 'RageDryRun::RuntimeProviders::capture_tick_state': function does not take 1 arguments [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+      C:\CS\TempleWare\TempleWare-CS2\source\templeware\rage\rage_runtime_providers.h(38,21):
+      see declaration of 'RageDryRun::RuntimeProviders::capture_tick_state'
+      C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2215,34):
+      while trying to match the argument list '()'
+  
+  vector.cpp
+  viewmatrix.cpp
+  gaa.cpp
+  patternscan.cpp
+  module.cpp
+  playerHook.cpp
+  players.cpp
+  aim.cpp
+  movement.cpp
+  prediction.cpp
+  antiaim.cpp
+  spectatorlist.cpp
+  visuals.cpp
+  antiflash.cpp
+  fov.cpp
+  world.cpp
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244: 'initializing': conversion from '_Ty' to '_Ty1', possible loss of data [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         with [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         [ [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:             _Ty=unsigned long [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         ] [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         and [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         [ [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:             _Ty1=uint8_t [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         ] [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  (compiling source file 'source/templeware/utils/memory/patternscan/patternscan.cpp')
+      C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16):
+      the template instantiation context (the oldest one first) is
+          C:\CS\TempleWare\TempleWare-CS2\source\templeware\utils\memory\patternscan\patternscan.cpp(32,26):
+          see reference to function template instantiation 'std::pair<uint8_t,bool> &std::vector<std::pair<uint8_t,bool>,std::allocator<std::pair<uint8_t,bool>>>::emplace_back<unsigned long,bool>(unsigned long &&,bool &&)' being compiled
+              C:\CS\TempleWare\TempleWare-CS2\source\templeware\utils\memory\patternscan\patternscan.cpp(32,38):
+              see the first reference to 'std::vector<std::pair<uint8_t,bool>,std::allocator<std::pair<uint8_t,bool>>>::emplace_back' in 'PatternToBytes'
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\vector(927,24):
+          see reference to function template instantiation '_Ty &std::vector<_Ty,std::allocator<_Ty>>::_Emplace_one_at_back<unsigned long,bool>(unsigned long &&,bool &&)' being compiled
+          with
+          [
+              _Ty=std::pair<uint8_t,bool>
+          ]
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\vector(847,20):
+          see reference to function template instantiation '_Ty &std::vector<_Ty,std::allocator<_Ty>>::_Emplace_back_with_unused_capacity<unsigned long,bool>(unsigned long &&,bool &&)' being compiled
+          with
+          [
+              _Ty=std::pair<uint8_t,bool>
+          ]
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\vector(862,18):
+          see reference to function template instantiation 'void std::_Construct_in_place<std::pair<uint8_t,bool>,_Ty,bool>(std::pair<uint8_t,bool> &,_Ty &&,bool &&) noexcept' being compiled
+          with
+          [
+              _Ty=unsigned long
+          ]
+          C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\xutility(661,61):
+          see reference to function template instantiation 'std::pair<uint8_t,bool>::pair<_Ty,bool,0>(_Other1 &&,_Other2 &&) noexcept' being compiled
+          with
+          [
+              _Ty=unsigned long,
+              _Other1=unsigned long,
+              _Other2=bool
+          ]
+  
+  schema.cpp
+  econ_item_system.cpp
+  features.cpp
+C:\CS\TempleWare\TempleWare-CS2\source\templeware\rage\rage_validation.h(327,31): error C2660: 'RageDryRun::RuntimeProviders::capture_tick_state': function does not take 0 arguments [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  (compiling source file 'source/gui/gui.cpp')
+      C:\CS\TempleWare\TempleWare-CS2\source\templeware\rage\rage_runtime_providers.h(38,21):
+      see declaration of 'RageDryRun::RuntimeProviders::capture_tick_state'
+      C:\CS\TempleWare\TempleWare-CS2\source\templeware\rage\rage_validation.h(327,31):
+      while trying to match the argument list '()'
+  
+Done Building Project "C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj" (Rebuild target(s)) -- FAILED.
+
+Build FAILED.
+
+"C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj" (Rebuild target) (1) ->
+(ClCompile target) -> 
+  C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244: 'initializing': conversion from '_Ty' to '_Ty1', possible loss of data [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         with [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         [ [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:             _Ty=unsigned long [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         ] [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         and [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         [ [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:             _Ty1=uint8_t [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36231\include\utility(277,16): warning C4244:         ] [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+
+
+"C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj" (Rebuild target) (1) ->
+(ClCompile target) -> 
+  C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2214,13): error C2653: 'I': is not a class or namespace name [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2214,16): error C2065: 'GlobalVars': undeclared identifier [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2216,44): error C2653: 'I': is not a class or namespace name [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2216,47): error C2065: 'GlobalVars': undeclared identifier [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2217,17): error C2653: 'I': is not a class or namespace name [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2217,20): error C2065: 'GlobalVars': undeclared identifier [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  C:\CS\TempleWare\TempleWare-CS2\source\esp\esp.cpp(2215,34): error C2660: 'RageDryRun::RuntimeProviders::capture_tick_state': function does not take 1 arguments [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+  C:\CS\TempleWare\TempleWare-CS2\source\templeware\rage\rage_validation.h(327,31): error C2660: 'RageDryRun::RuntimeProviders::capture_tick_state': function does not take 0 arguments [C:\CS\TempleWare\TempleWare-CS2\TempleWare-CS2.vcxproj]
+
+    1 Warning(s)
+    8 Error(s)
+
+Time Elapsed 00:00:06.24
