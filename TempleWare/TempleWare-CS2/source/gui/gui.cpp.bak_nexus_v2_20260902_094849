@@ -5,7 +5,6 @@
 #include "../templeware/config/gui_config.h"
 #include "../templeware/config/config.h"
 #include "../templeware/features/skinchanger/skinchanger.h"
-#include "../templeware/rage/rage_validation.h"
 
 #include "../../external/imgui/imgui.h"
 #include "../nerv/nerv_bridge.h"
@@ -1163,202 +1162,25 @@ namespace
     // ---------------- SETTINGS ----------------
     void PageSettings(float x, float y, float w, float h)
     {
-        (void)h;
         PageTitle(x, y, "SETTINGS");
-
         const float bodyY = y + S(30.f);
-        const float pageX = x + S(20.f);
-        const float pageW = w - S(40.f);
-        const float interfaceW = S(360.f);
-
-        // ------------------------------------------------------------
-        // INTERFACE
-        // ------------------------------------------------------------
-        BeginCard("Interface", pageX, bodyY, interfaceW);
+        const float colW = S(360.f), ix = x + S(36.f), iw = colW - S(32.f);
+        BeginCard("Interface", x + S(20.f), bodyY, colW);
         float ry = CardBodyY();
-        const float ix = pageX + S(16.f);
-
         Label(ix, ry, "UI scale", U32(DIM));
-        float sc = g_uiScale;
-        Slider("##uisc",
-               ix + interfaceW - S(32.f) - S(160.f) - S(50.f),
-               ry, S(160.f), &sc, 0.7f, 3.0f, "%.2fx");
-        g_uiScale = sc;
+        float sc = g_uiScale; Slider("##uisc", ix + colW - S(32.f) - S(160.f) - S(50.f), ry, S(160.f), &sc, 0.7f, 3.0f, "%.2fx"); g_uiScale = sc;
         ry += S(34.f);
-
         Label(ix, ry + S(4.f), "Center window", U32(TEXT));
+        // simple button
         {
-            const float bx = ix + interfaceW - S(120.f) - S(16.f);
-            const float bw = S(120.f), bh = S(26.f);
+            const float bx = ix + colW - S(120.f) - S(16.f), bw = S(120.f), bh = S(26.f);
             bool bh2 = false;
-            if (Hit("##centerbtn", ImVec2(bx, ry), ImVec2(bw, bh), bh2))
-                g_needCenter = true;
-            RectF(ImVec2(bx, ry), ImVec2(bx + bw, ry + bh),
-                  U32(bh2 ? WithA(g_accent, 0.4f) : FRAME), S(5.f));
-            Text(ImVec2(bx + (bw - TW("Recenter")) * 0.5f,
-                        ry + (bh - TH()) * 0.5f), U32(TEXT), "Recenter");
+            if (Hit("##centerbtn", ImVec2(bx, ry), ImVec2(bw, bh), bh2)) g_needCenter = true;
+            RectF(ImVec2(bx, ry), ImVec2(bx + bw, ry + bh), U32(bh2 ? WithA(g_accent, 0.4f) : FRAME), S(5.f));
+            Text(ImVec2(bx + (bw - TW("Recenter")) * 0.5f, ry + (bh - TH()) * 0.5f), U32(TEXT), "Recenter");
         }
         ry += S(40.f);
         EndCard(ry);
-
-        // ------------------------------------------------------------
-        // DEBUG / VALIDATION
-        // Restored P6/P8/P9 diagnostics. These controls only exercise the
-        // existing dry-run/read-only validation paths; execution stays NO-OP.
-        // ------------------------------------------------------------
-        const float debugY = bodyY + S(145.f);
-        BeginCard("DEBUG / VALIDATION", pageX, debugY, pageW);
-        float dy = CardBodyY();
-        const float dix = pageX + S(16.f);
-        const float diw = pageW - S(32.f);
-        const float bgap = S(8.f);
-        const float bh = S(28.f);
-        const float bw = (diw - bgap * 3.f) * 0.25f;
-
-        if (Button("##rage_validate", dix, dy, bw, bh, "Validate", true))
-            RageDryRun::run_validation_suite();
-
-        if (Button("##rage_self_test", dix + (bw + bgap), dy,
-                   bw, bh, "Self Test", false))
-            RageDryRun::run_builtin_self_test();
-
-        if (Button("##rage_full_synth", dix + (bw + bgap) * 2.f, dy,
-                   bw, bh, "Full Synth", false))
-            RageDryRun::load_synthetic_demo();
-
-        if (Button("##rage_reset", dix + (bw + bgap) * 3.f, dy,
-                   bw, bh, "Reset", false))
-        {
-            RageDryRun::reset_state();
-            RageDryRun::RuntimeProviders::reset_runtime_state();
-            RageDryRun::g_validation = {};
-        }
-
-        dy += bh + S(12.f);
-
-        // Validation summary.
-        if (RageDryRun::g_validation.ran)
-        {
-            char b[160]{};
-            std::snprintf(b, sizeof(b), "VALIDATION: %s  %d/%d  (%lld us)",
-                          RageDryRun::g_validation.ok() ? "PASS" : "FAIL",
-                          RageDryRun::g_validation.passed,
-                          RageDryRun::g_validation.total,
-                          RageDryRun::g_validation.perf_us);
-            Text(ImVec2(dix, dy),
-                 RageDryRun::g_validation.ok() ? U32(GREEN) : U32(g_accent), b);
-            dy += S(20.f);
-
-            if (!RageDryRun::g_validation.ok() &&
-                RageDryRun::g_validation.first_fail[0])
-            {
-                std::snprintf(b, sizeof(b), "first fail: %s",
-                              RageDryRun::g_validation.first_fail);
-                Text(ImVec2(dix, dy), U32(g_accent), b);
-                dy += S(20.f);
-            }
-        }
-        else
-        {
-            Text(ImVec2(dix, dy), U32(DIM), "VALIDATION: NOT RUN");
-            dy += S(20.f);
-        }
-
-        // Self-test + evaluator status.
-        {
-            const auto& st = RageDryRun::g_state.self_test;
-            const bool stPass = st.ran && st.fov_selection_pass &&
-                                st.distance_selection_pass &&
-                                st.invisible_rejection_pass;
-            const auto& et = RageDryRun::g_state.evaluator_tests;
-
-            char b[160]{};
-            std::snprintf(b, sizeof(b), "Self Test: %s    Evaluators: %s",
-                          st.ran ? (stPass ? "PASS" : "FAIL") : "NOT RUN",
-                          et.ran ? (et.all() ? "PASS" : "FAIL") : "NOT RUN");
-            Text(ImVec2(dix, dy),
-                 (stPass && (!et.ran || et.all())) ? U32(GREEN) : U32(DIM), b);
-            dy += S(24.f);
-        }
-
-        // Readiness/runtime snapshot. Do not fake READY: display exactly what
-        // the existing providers currently report.
-        const auto& r = RageDryRun::g_state.readiness;
-        const auto src = RageDryRun::g_state.source;
-        const auto rt = RageDryRun::RuntimeProviders::get_runtime_diagnostics();
-
-        {
-            char b[192]{};
-            std::snprintf(b, sizeof(b), "Source: %s    entities=%d    generation=%llu",
-                          RageDryRun::source_name(src),
-                          RageDryRun::g_state.live_entity_count,
-                          static_cast<unsigned long long>(RageDryRun::g_state.generation));
-            Text(ImVec2(dix, dy), U32(TEXT), b);
-            dy += S(22.f);
-        }
-
-        auto readinessColor = [](RageDryRun::Readiness v) -> ImU32
-        {
-            if (v == RageDryRun::Readiness::Ready) return U32(GREEN);
-            if (v == RageDryRun::Readiness::Blocked) return U32(g_accent);
-            return U32(DIM);
-        };
-
-        // Two compact columns keep the card readable at smaller window sizes.
-        const float laneGap = S(24.f);
-        const float laneW = (diw - laneGap) * 0.5f;
-        float ly = dy;
-        float ry2 = dy;
-
-        auto lane = [&](float lx, float& yy, const char* name, RageDryRun::Readiness v)
-        {
-            char b[128]{};
-            std::snprintf(b, sizeof(b), "%-12s %s", name,
-                          RageDryRun::lane_label(v, src));
-            Text(ImVec2(lx, yy), readinessColor(v), b);
-            yy += S(19.f);
-        };
-
-        lane(dix, ly, "Frame", r.combat_frame);
-        lane(dix, ly, "Entities", r.entities);
-        lane(dix, ly, "Weapon", r.weapon);
-        lane(dix, ly, "Prediction", r.prediction);
-        lane(dix, ly, "Bones", r.bones);
-
-        const float col2 = dix + laneW + laneGap;
-        lane(col2, ry2, "Hitboxes", r.hitboxes);
-        lane(col2, ry2, "Trace", r.trace);
-        lane(col2, ry2, "Penetration", r.penetration);
-        lane(col2, ry2, "Command", r.command);
-
-        dy = (ly > ry2 ? ly : ry2) + S(4.f);
-
-        {
-            char b[192]{};
-            std::snprintf(b, sizeof(b),
-                          "Tick: %s  cur=%u  frac=%.2f    Trace runtime=%s",
-                          rt.tick_state_valid ? "READY" : "UNAVAILABLE",
-                          rt.current_tick, rt.current_subtick_frac,
-                          rt.trace_ready ? "READY" : "BLOCKED");
-            Text(ImVec2(dix, dy),
-                 rt.tick_state_valid ? U32(GREEN) : U32(DIM), b);
-            dy += S(20.f);
-
-            std::snprintf(b, sizeof(b),
-                          "Penetration runtime=%s    Execution=DISABLED",
-                          rt.penetration_active ? "READY" : "BLOCKED");
-            Text(ImVec2(dix, dy), U32(DIM), b);
-            dy += S(24.f);
-        }
-
-        // Manual status refresh only. Normal live capture can continue to
-        // update readiness elsewhere without this panel owning that lifecycle.
-        if (Button("##rage_refresh_status", dix, dy, S(132.f), bh,
-                   "Refresh Status", false))
-            RageDryRun::refresh_provider_readiness();
-        dy += bh;
-
-        EndCard(dy);
     }
 
     void PageSimple(const char* title, float x, float y, float w, float h)

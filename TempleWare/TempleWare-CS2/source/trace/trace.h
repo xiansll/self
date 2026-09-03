@@ -1,9 +1,9 @@
 #pragma once
 #include <cstdint>
 
-// World line-of-sight via CS2's TraceShape (client.dll). Existing runtime calls
-// remain unchanged. P5B adds resolver-health diagnostics only; it does not add
-// new signatures or new trace behavior.
+// World line-of-sight through the project's existing TraceShape backend.
+// ResolverDiagnostics keeps its legacy field names for compatibility:
+// manager=resolved physics-world object, trace_ray=resolved TraceShape address.
 namespace Trace
 {
     struct ResolverDiagnostics {
@@ -20,9 +20,8 @@ namespace Trace
     bool Initialize();
     bool Ready();
 
-    // Re-run only the already-existing resolver expressions and classify the
-    // missing layer. Any pointer that was null during the early Initialize()
-    // call may be filled if the same existing resolver succeeds later.
+    // Re-check only the project's already-existing resolved dependencies and
+    // classify whether TraceShape can be considered ready. No new resolver is added.
     bool DiagnoseAndRetryExistingResolvers();
     ResolverDiagnostics GetResolverDiagnostics();
 
