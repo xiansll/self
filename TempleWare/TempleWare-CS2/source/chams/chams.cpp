@@ -18,13 +18,31 @@ namespace
     {
         wchar_t path[MAX_PATH] = {};
         GetTempPathW(MAX_PATH, path);
-        wcscat_s(path, MAX_PATH, L"TempleWare.log");
+        wcscat_s(path, MAX_PATH, L"TempleWare-Clean.log");
         FILE* f = nullptr;
         if (_wfopen_s(&f, path, L"a") == 0 && f)
         {
             fprintf(f, "[chams] %s\n", msg);
             fclose(f);
         }
+    }
+
+    bool ShouldTraceHook()
+    {
+        static ULONGLONG last = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - last < 250) return false;
+        last = now;
+        return true;
+    }
+
+    bool ShouldTraceTargets()
+    {
+        static ULONGLONG last = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - last < 250) return false;
+        last = now;
+        return true;
     }
 
     // ---------------------------------------------------------------------
@@ -635,6 +653,9 @@ namespace
     void __fastcall hkDrawArray(void* a1, void* a2, uintptr_t pMeshScene, int nMeshCount,
                                 void* pSceneView, void* pSceneLayer, void* pUnk, void* pUnk2)
     {
+        const bool trace = ShouldTraceHook();
+        if (trace) LogLine("[CHAMS-200] DrawArray BEGIN");
+
         const auto& cfg = Esp::g_config;
         int scope = SC_NONE;
 
@@ -669,25 +690,38 @@ namespace
 
         if (!g_installed || (!doVis && !doXqz) || !g_mat[MAT_FLAT][0])
         {
+            if (trace) LogLine("[CHAMS-230] Original pass BEGIN");
             oDrawArray(a1, a2, pMeshScene, nMeshCount, pSceneView, pSceneLayer, pUnk, pUnk2);
+            if (trace) LogLine("[CHAMS-231] Original pass END");
+            if (trace) LogLine("[CHAMS-201] DrawArray END");
             return;
         }
 
         bool drew = false;
         if (doXqz && xqzCol)
         {
+            if (trace) LogLine("[CHAMS-210] XQZ draw BEGIN");
             SetMeshMat(pMeshScene, PickMat(mat, 1), xqzCol);
             oDrawArray(a1, a2, pMeshScene, nMeshCount, pSceneView, pSceneLayer, pUnk, pUnk2);
+            if (trace) LogLine("[CHAMS-211] XQZ draw END");
             drew = true;
         }
         if (doVis && visCol)
         {
+            if (trace) LogLine("[CHAMS-220] Visible draw BEGIN");
             SetMeshMat(pMeshScene, PickMat(mat, 0), visCol);
             oDrawArray(a1, a2, pMeshScene, nMeshCount, pSceneView, pSceneLayer, pUnk, pUnk2);
+            if (trace) LogLine("[CHAMS-221] Visible draw END");
             drew = true;
         }
         if (!drew)
+        {
+            if (trace) LogLine("[CHAMS-230] Original pass BEGIN");
             oDrawArray(a1, a2, pMeshScene, nMeshCount, pSceneView, pSceneLayer, pUnk, pUnk2);
+            if (trace) LogLine("[CHAMS-231] Original pass END");
+        }
+
+        if (trace) LogLine("[CHAMS-201] DrawArray END");
     }
 }
 
@@ -697,14 +731,33 @@ namespace Chams
     {
         if (g_installed) return true;
 
-        // Resolve material-system functions.
-        g_kv3Alloc       = reinterpret_cast<fnKv3Alloc>(ResolvePattern("tier0.dll", ">E8????????4C8BF0EB03"));
-        g_kv3Load        = reinterpret_cast<fnKv3Load>(ResolvePattern("tier0.dll", "44242848897C2420>E8????????0FB6D88B4C2444"));
-        // Direct CMaterialSystem2 CreateMaterial prologue (verified: unique match on this build).
-        g_materialCreate = reinterpret_cast<fnMaterialCreate>(ResolvePattern("materialsystem2.dll",
+        LogLine("[CHAMS-100] Internal Initialize BEGIN");
+
+        LogLine("[CHAMS-101] Resolve kv3Alloc BEGIN");
+        g_kv3Alloc = reinterpret_cast<fnKv3Alloc>(
+            ResolvePattern("tier0.dll", ">E8????????4C8BF0EB03"));
+        LogLine("[CHAMS-102] Resolve kv3Alloc END");
+
+        LogLine("[CHAMS-103] Resolve kv3Load BEGIN");
+        g_kv3Load = reinterpret_cast<fnKv3Load>(
+            ResolvePattern("tier0.dll", "44242848897C2420>E8????????0FB6D88B4C2444"));
+        LogLine("[CHAMS-104] Resolve kv3Load END");
+
+        LogLine("[CHAMS-105] Resolve materialCreate BEGIN");
+        g_materialCreate = reinterpret_cast<fnMaterialCreate>(ResolvePattern(
+            "materialsystem2.dll",
             "48 89 5C 24 ? 48 89 6C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 41 56 48 81 EC ? ? ? ? 48 8B 05 ? ? ? ? 48 8B F2"));
-        g_utlCtor        = reinterpret_cast<fnUtlBufCtor>(Export("tier0.dll", "??0CUtlBuffer@@QEAA@HHW4BufferFlags_t@0@@Z"));
-        g_utlPutString   = reinterpret_cast<fnUtlPutString>(Export("tier0.dll", "?PutString@CUtlBuffer@@QEAAXPEBD@Z"));
+        LogLine("[CHAMS-106] Resolve materialCreate END");
+
+        LogLine("[CHAMS-107] Resolve utlCtor BEGIN");
+        g_utlCtor = reinterpret_cast<fnUtlBufCtor>(
+            Export("tier0.dll", "??0CUtlBuffer@@QEAA@HHW4BufferFlags_t@0@@Z"));
+        LogLine("[CHAMS-108] Resolve utlCtor END");
+
+        LogLine("[CHAMS-109] Resolve putString BEGIN");
+        g_utlPutString = reinterpret_cast<fnUtlPutString>(
+            Export("tier0.dll", "?PutString@CUtlBuffer@@QEAAXPEBD@Z"));
+        LogLine("[CHAMS-110] Resolve putString END");
 
         {
             char b[256];
@@ -720,10 +773,12 @@ namespace Chams
 
         if (!g_kv3Alloc || !g_kv3Load || !g_materialCreate || !g_utlCtor || !g_utlPutString)
         {
-            LogLine("material functions unresolved");
+            LogLine("[CHAMS-111] Resolver FAILED");
             return false;
         }
+        LogLine("[CHAMS-112] Resolver END");
 
+        LogLine("[CHAMS-120] Materials BEGIN");
         const char* matNames[MAT_COUNT][2] = {
             { "materials/dev/tw_flat.vmat",  "materials/dev/tw_flat_i.vmat"  },
             { "materials/dev/tw_illum.vmat", "materials/dev/tw_illum_i.vmat" },
@@ -738,8 +793,32 @@ namespace Chams
             { "materials/dev/tw_pearl.vmat", "materials/dev/tw_pearl_i.vmat" },
         };
         for (int t = 0; t < MAT_COUNT; ++t)
+        {
             for (int l = 0; l < 2; ++l)
+            {
+                char begin[128];
+                std::snprintf(
+                    begin,
+                    sizeof(begin),
+                    "[CHAMS-121] Material type=%d layer=%d BEGIN",
+                    t,
+                    l);
+                LogLine(begin);
+
                 g_mat[t][l] = CreateMaterial(kVmat[t][l], matNames[t][l]);
+
+                char end[160];
+                std::snprintf(
+                    end,
+                    sizeof(end),
+                    "[CHAMS-122] Material type=%d layer=%d END ptr=%p",
+                    t,
+                    l,
+                    reinterpret_cast<void*>(g_mat[t][l]));
+                LogLine(end);
+            }
+        }
+        LogLine("[CHAMS-123] Materials END");
 
         {
             char b[192];
@@ -754,38 +833,59 @@ namespace Chams
             return false;
         }
 
-        // Resolve + hook scenesystem DrawArray (per-mesh material override).
-        g_drawArrayAddr = reinterpret_cast<void*>(ResolvePattern("scenesystem.dll",
+        LogLine("[CHAMS-130] DrawArray resolve BEGIN");
+        g_drawArrayAddr = reinterpret_cast<void*>(ResolvePattern(
+            "scenesystem.dll",
             "48 8B C4 53 57 41 54 48 81 EC D0 00 00 00 49 63 F9 49"));
+
         if (!g_drawArrayAddr)
         {
-            LogLine("DrawArray pattern not found");
+            LogLine("[CHAMS-131] DrawArray resolve FAILED");
             return false;
         }
+        LogLine("[CHAMS-131] DrawArray resolve END");
 
-        MH_Initialize(); // no-op if kiero already did it
-        if (MH_CreateHook(g_drawArrayAddr, &hkDrawArray, reinterpret_cast<void**>(&oDrawArray)) != MH_OK)
+        MH_Initialize();
+
+        LogLine("[CHAMS-140] CreateHook BEGIN");
+        const MH_STATUS createStatus = MH_CreateHook(
+            g_drawArrayAddr,
+            &hkDrawArray,
+            reinterpret_cast<void**>(&oDrawArray));
+        if (createStatus != MH_OK)
         {
-            LogLine("MH_CreateHook failed");
+            LogLine("[CHAMS-141] CreateHook FAILED");
             return false;
         }
-        if (MH_EnableHook(g_drawArrayAddr) != MH_OK)
+        LogLine("[CHAMS-141] CreateHook END");
+
+        LogLine("[CHAMS-142] EnableHook BEGIN");
+        const MH_STATUS enableStatus = MH_EnableHook(g_drawArrayAddr);
+        if (enableStatus != MH_OK)
         {
-            LogLine("MH_EnableHook failed");
+            LogLine("[CHAMS-143] EnableHook FAILED");
             return false;
         }
+        LogLine("[CHAMS-143] EnableHook END");
 
         g_installed = true;
-        LogLine("chams init ok");
+        LogLine("[CHAMS-150] Internal Initialize END ready=1");
         return true;
     }
 
     __declspec(dllexport) void Shutdown()
     {
-        if (!g_installed) return;
+        LogLine("[CHAMS-400] Internal Shutdown BEGIN");
+        if (!g_installed)
+        {
+            LogLine("[CHAMS-401] Internal Shutdown END inactive");
+            return;
+        }
+
         MH_DisableHook(g_drawArrayAddr);
         MH_RemoveHook(g_drawArrayAddr);
         g_installed = false;
+        LogLine("[CHAMS-401] Internal Shutdown END");
     }
 
     __declspec(dllexport) void UpdateTargets(const uintptr_t* enemies, int nEnemy,
@@ -794,6 +894,9 @@ namespace Chams
                            const uintptr_t* items, int nItems,
                            const uintptr_t* ragdolls, int nRagdolls)
     {
+        const bool trace = ShouldTraceTargets();
+        if (trace) LogLine("[CHAMS-300] UpdateTargets BEGIN");
+
         if (nEnemy < 0) nEnemy = 0; if (nEnemy > 64) nEnemy = 64;
         if (nTeam  < 0) nTeam  = 0; if (nTeam  > 64) nTeam  = 64;
         if (nItems < 0) nItems = 0; if (nItems > 128) nItems = 128;
@@ -803,5 +906,7 @@ namespace Chams
         for (int i = 0; i < nItems; ++i) g_items[i] = items[i];
         for (int i = 0; i < nRagdolls; ++i) g_ragdolls[i] = ragdolls[i];
         g_enemyN = nEnemy; g_teamN = nTeam; g_itemsN = nItems; g_ragdollN = nRagdolls; g_local = local;
+
+        if (trace) LogLine("[CHAMS-301] UpdateTargets END");
     }
 }
