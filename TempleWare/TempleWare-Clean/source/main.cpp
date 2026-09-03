@@ -50,6 +50,7 @@ namespace CleanGui
     bool testToggle = false;
     bool espModuleReady = false;
     bool iconModuleReady = false;
+    bool chamsModuleReady = false;
     float uiScale = 1.0f;
     ImVec4 accent = ImVec4(1.00f, 0.38f, 0.08f, 1.00f);
 
@@ -364,6 +365,12 @@ namespace CleanGui
             ? "[ESP-03] Esp::Initialize END ready=1"
             : "[ESP-03] Esp::Initialize END ready=0");
 
+        Log("[CHAMS-00] Chams::Initialize BEGIN");
+        chamsModuleReady = Chams::Initialize();
+        Log(chamsModuleReady
+            ? "[CHAMS-01] Chams::Initialize END ready=1"
+            : "[CHAMS-01] Chams::Initialize END ready=0");
+
         initialized.store(true);
         Log("[CLEAN] ImGui ready");
         return true;
@@ -415,6 +422,14 @@ namespace CleanGui
                 : ImVec4(0.95f, 0.65f, 0.25f, 1.00f),
             espModuleReady ? "READY" : "WAITING");
 
+        ImGui::Text("Chams module");
+        ImGui::SameLine(170.0f);
+        ImGui::TextColored(
+            chamsModuleReady
+                ? ImVec4(0.35f, 0.90f, 0.55f, 1.00f)
+                : ImVec4(0.95f, 0.65f, 0.25f, 1.00f),
+            chamsModuleReady ? "READY" : "WAITING");
+
         ImGui::Text("Entity / matrix");
         ImGui::SameLine(170.0f);
         ImGui::Text(
@@ -461,6 +476,41 @@ namespace CleanGui
         ImGui::Checkbox("Crosshair", &config.crosshair);
 
         ImGui::ColorEdit4("Box color", config.boxColor);
+    }
+
+    void DrawChams()
+    {
+        ImGui::TextColored(accent, "CHAMS");
+
+        Esp::Config& config = Esp::g_config;
+        const char* materialTypes[] = {
+            "Flat", "Illuminate", "Glow", "Matte", "Outline", "Hologram",
+            "Metallic", "Liquid", "Bloom", "Distortion", "Pearl"
+        };
+
+        ImGui::Combo(
+            "Material",
+            &config.chamsType,
+            materialTypes,
+            IM_ARRAYSIZE(materialTypes));
+
+        ImGui::Separator();
+        ImGui::Checkbox("Enemy visible", &config.chams);
+        ImGui::ColorEdit4("Enemy color", config.chamsColor);
+        ImGui::Checkbox("Enemy through wall", &config.chamsXqz);
+        ImGui::ColorEdit4("Through wall color", config.chamsXqzColor);
+
+        ImGui::Separator();
+        ImGui::Checkbox("Team chams", &config.chamsTeam);
+        ImGui::ColorEdit4("Team color", config.chamsTeamColor);
+        ImGui::Checkbox("Local chams", &config.chamsLocal);
+        ImGui::ColorEdit4("Local color", config.chamsLocalColor);
+
+        ImGui::Separator();
+        ImGui::Checkbox("Dropped item chams", &config.itemChams);
+        ImGui::ColorEdit4("Item color", config.itemChamsColor);
+        ImGui::Checkbox("Ragdoll chams", &config.ragdollChams);
+        ImGui::ColorEdit4("Ragdoll color", config.ragdollChamsColor);
     }
 
     void DrawSettings()
@@ -528,7 +578,8 @@ namespace CleanGui
 
         PageButton("Overview", 0);
         PageButton("Visuals", 1);
-        PageButton("Settings", 2);
+        PageButton("Chams", 2);
+        PageButton("Settings", 3);
 
         ImGui::SetCursorPosY(268.0f);
         ImGui::TextColored(
@@ -541,12 +592,15 @@ namespace CleanGui
         ImGui::BeginChild(
             "content",
             ImVec2(0.0f, 326.0f),
-            true);
+            true,
+            ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
         if (selectedPage == 0)
             DrawOverview();
         else if (selectedPage == 1)
             DrawVisuals();
+        else if (selectedPage == 2)
+            DrawChams();
         else
             DrawSettings();
 
@@ -579,9 +633,10 @@ namespace CleanGui
                 reinterpret_cast<LONG_PTR>(originalWndProc));
         }
 
-        Log("[ESP-90] ESP shutdown BEGIN");
+        Log("[CHAMS-90] Chams::Shutdown BEGIN");
         Chams::Shutdown();
-        Log("[ESP-91] ESP shutdown END");
+        chamsModuleReady = false;
+        Log("[CHAMS-91] Chams::Shutdown END");
 
         ImGui_ImplDX11_Shutdown();
         ImGui_ImplWin32_Shutdown();
