@@ -572,9 +572,16 @@ namespace CleanGui
 
         Esp::Config& config = Esp::g_config;
         ImGui::Checkbox("Real visibility", &config.realVis);
+        ImGui::Checkbox("Visibility box colors", &config.visColor);
+        ImGui::ColorEdit4("Visible box color", config.visibleColor);
+        ImGui::ColorEdit4("Hidden box color", config.occludedColor);
+
         ImGui::Checkbox(
             "Skeleton visibility colors",
             &config.skeletonVisColor);
+        ImGui::ColorEdit4(
+            "Skeleton visible color",
+            config.skeletonColor);
         ImGui::ColorEdit4(
             "Skeleton hidden color",
             config.skeletonOccludedColor);
