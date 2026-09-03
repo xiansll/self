@@ -1,30 +1,4 @@
-#include "../../TempleWare-CS2/source/chams/chams.h"
 #include "../../TempleWare-CS2/source/trace/trace.h"
-
-namespace Chams
-{
-    bool Initialize()
-    {
-        return false;
-    }
-
-    void Shutdown()
-    {
-    }
-
-    void UpdateTargets(
-        const uintptr_t*,
-        int,
-        const uintptr_t*,
-        int,
-        uintptr_t,
-        const uintptr_t*,
-        int,
-        const uintptr_t*,
-        int)
-    {
-    }
-}
 
 namespace Trace
 {
