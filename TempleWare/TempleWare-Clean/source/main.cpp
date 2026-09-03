@@ -17,6 +17,7 @@
 #include "../../TempleWare-CS2/source/esp/esp.h"
 #include "../../TempleWare-CS2/source/icons/icons.h"
 #include "../../TempleWare-CS2/source/chams/chams.h"
+#include "../../TempleWare-CS2/source/trace/trace.h"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -51,6 +52,7 @@ namespace CleanGui
     bool espModuleReady = false;
     bool iconModuleReady = false;
     bool chamsModuleReady = false;
+    bool traceModuleReady = false;
     float uiScale = 1.0f;
     ImVec4 accent = ImVec4(1.00f, 0.38f, 0.08f, 1.00f);
 
@@ -145,6 +147,17 @@ namespace CleanGui
     void RunEspFrame()
     {
         const bool trace = ShouldTraceEspFrame();
+
+        if (!Trace::Ready()) {
+            if (trace) Log("[TRACE-10] Trace retry BEGIN");
+            Trace::ThrottledRetry();
+            if (trace) {
+                Log(Trace::Ready()
+                    ? "[TRACE-11] Trace retry END ready=1"
+                    : "[TRACE-11] Trace retry END ready=0");
+            }
+        }
+        traceModuleReady = Trace::Ready();
 
         if (trace) Log("[ESP-10] Esp::Draw BEGIN");
         Esp::Draw();
@@ -371,6 +384,12 @@ namespace CleanGui
             ? "[CHAMS-01] Chams::Initialize END ready=1"
             : "[CHAMS-01] Chams::Initialize END ready=0");
 
+        Log("[TRACE-00] Trace::Initialize BEGIN");
+        traceModuleReady = Trace::Initialize();
+        Log(traceModuleReady
+            ? "[TRACE-01] Trace::Initialize END ready=1"
+            : "[TRACE-01] Trace::Initialize END ready=0");
+
         initialized.store(true);
         Log("[CLEAN] ImGui ready");
         return true;
@@ -429,6 +448,14 @@ namespace CleanGui
                 ? ImVec4(0.35f, 0.90f, 0.55f, 1.00f)
                 : ImVec4(0.95f, 0.65f, 0.25f, 1.00f),
             chamsModuleReady ? "READY" : "WAITING");
+
+        ImGui::Text("Trace module");
+        ImGui::SameLine(170.0f);
+        ImGui::TextColored(
+            traceModuleReady
+                ? ImVec4(0.35f, 0.90f, 0.55f, 1.00f)
+                : ImVec4(0.95f, 0.65f, 0.25f, 1.00f),
+            traceModuleReady ? "READY" : "WAITING");
 
         ImGui::Text("Entity / matrix");
         ImGui::SameLine(170.0f);
@@ -513,6 +540,55 @@ namespace CleanGui
         ImGui::ColorEdit4("Ragdoll color", config.ragdollChamsColor);
     }
 
+    void DrawTrace()
+    {
+        ImGui::TextColored(accent, "TRACE");
+
+        traceModuleReady = Trace::Ready();
+        const Trace::ResolverDiagnostics diagnostics =
+            Trace::GetResolverDiagnostics();
+
+        ImGui::Text("Module");
+        ImGui::SameLine(170.0f);
+        ImGui::TextColored(
+            traceModuleReady
+                ? ImVec4(0.35f, 0.90f, 0.55f, 1.00f)
+                : ImVec4(0.95f, 0.65f, 0.25f, 1.00f),
+            traceModuleReady ? "READY" : "WAITING");
+
+        ImGui::Text("World");
+        ImGui::SameLine(170.0f);
+        ImGui::Text(diagnostics.manager ? "READY" : "WAITING");
+
+        ImGui::Text("Trace function");
+        ImGui::SameLine(170.0f);
+        ImGui::Text(diagnostics.trace_ray ? "READY" : "WAITING");
+
+        ImGui::Text("Filter function");
+        ImGui::SameLine(170.0f);
+        ImGui::Text(diagnostics.filter_init ? "READY" : "WAITING");
+
+        ImGui::Separator();
+
+        Esp::Config& config = Esp::g_config;
+        ImGui::Checkbox("Real visibility", &config.realVis);
+        ImGui::Checkbox(
+            "Skeleton visibility colors",
+            &config.skeletonVisColor);
+        ImGui::ColorEdit4(
+            "Skeleton hidden color",
+            config.skeletonOccludedColor);
+
+        ImGui::Separator();
+        ImGui::Checkbox("Grenade trajectory", &config.nadeTrajectory);
+        ImGui::Checkbox("Throw prediction", &config.nadeThrow);
+        ImGui::ColorEdit4(
+            "Throw prediction color",
+            config.nadeThrowColor);
+        ImGui::Checkbox("Inferno area", &config.infernoFill);
+        ImGui::ColorEdit4("Inferno color", config.infernoColor);
+    }
+
     void DrawSettings()
     {
         ImGui::TextColored(accent, "SETTINGS");
@@ -579,7 +655,8 @@ namespace CleanGui
         PageButton("Overview", 0);
         PageButton("Visuals", 1);
         PageButton("Chams", 2);
-        PageButton("Settings", 3);
+        PageButton("Trace", 3);
+        PageButton("Settings", 4);
 
         ImGui::SetCursorPosY(268.0f);
         ImGui::TextColored(
@@ -601,6 +678,8 @@ namespace CleanGui
             DrawVisuals();
         else if (selectedPage == 2)
             DrawChams();
+        else if (selectedPage == 3)
+            DrawTrace();
         else
             DrawSettings();
 
