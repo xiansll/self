@@ -25,6 +25,11 @@ namespace Trace
     bool DiagnoseAndRetryExistingResolvers();
     ResolverDiagnostics GetResolverDiagnostics();
 
+    // Throttled retry: call every frame, internally gates to ~500ms intervals
+    // with a total 8-second wall-clock cap. Returns true once ready or when
+    // the retry budget is exhausted (check Ready() for actual state).
+    bool ThrottledRetry();
+
     // start/end are float[3] world positions. Returns true if `target` is
     // reachable from `start` (direct LOS to `end`), skipping `skip`.
     bool IsVisible(const float start[3], const float end[3], uintptr_t target, uintptr_t skip);

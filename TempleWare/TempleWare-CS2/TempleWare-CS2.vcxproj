@@ -231,6 +231,8 @@
     <ClCompile Include="source\cs2\vtables\usermessages.pb.cc" />
     <ClCompile Include="source\gui\gui.cpp" />
     <ClCompile Include="source\trace\trace.cpp" />
+    <ClCompile Include="source\trace\autowall.cpp" />
+    <ClCompile Include="source\trace\autowall_debug.cpp" />
     <ClCompile Include="source\andro\CS2\SDK\SDK.cpp" />
     <ClCompile Include="source\andro\CS2\SDK\CFunctionList.cpp" />
     <ClCompile Include="source\andro\CS2\CBasePattern.cpp" />

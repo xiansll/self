@@ -97,7 +97,7 @@ public:
 	CBasePattern C_BaseEntity_GetBoneIdByName = { VmpStr( "C_BaseEntity::GetBoneIdByName" ) , VmpStr( "E8 ? ? ? ? 48 8B CF 85 C0 78 ? 44 8B C0" ) , CLIENT_DLL , 0 , SEARCH_TYPE_CALL };
 	CBasePattern C_EconItemView_GetBasePlayerWeaponVData = { VmpStr( "C_EconItemView::GetBasePlayerWeaponVData" ) , VmpStr( "48 81 EC ? ? ? ? 48 85 C9 75 ? 33 C0 48 81 C4 ? ? ? ? C3 48 89 9C 24" ) , CLIENT_DLL , 0 , SEARCH_TYPE_NONE };
 	CBasePattern KeyValues3_LoadKV3 = { VmpStr( "KeyValues3::LoadKV3" ) , VmpStr( "?LoadKV3@@YA_NPEAVKeyValues3@@PEAVCUtlString@@PEBDAEBUKV3ID_t@@2I@Z" ) , TIER0_DLL , 0 , SEARCH_TYPE_PROC };
-	CBasePattern IGamePhysicsQuery_TraceShape = { VmpStr( "IGamePhysicsQuery::TraceShape" ) , VmpStr( "48 89 5C 24 ? 48 89 4C 24 ? 55 57" ) , CLIENT_DLL , 0 , SEARCH_TYPE_NONE };
+	CBasePattern IGamePhysicsQuery_TraceShape = { VmpStr( "IGamePhysicsQuery::TraceShape" ) , VmpStr( "48 89 54 24 ? 48 89 4C 24 ? 55 53 56 57 41 56 41 57 48 8D AC 24 ? ? ? ? B8" ) , CLIENT_DLL , 0 , SEARCH_TYPE_NONE };
 	CBasePattern CCSGOInput_GetViewAngles = { VmpStr( "CCSGOInput::GetViewAngles" ) , VmpStr( "E8 ? ? ? ? EB ? 48 85 C9 75 ? 48 8B CF" ) , CLIENT_DLL , 0 , SEARCH_TYPE_CALL };
 	CBasePattern CCSGOInput_SetViewAngles = { VmpStr( "CCSGOInput::SetViewAngles" ) , VmpStr( "85 D2 75 ? 48 63 81" ) , CLIENT_DLL , 0 , SEARCH_TYPE_NONE };
 	// ___7___Func_impl_no_alloc_V_lambda_1___1__GetSmokeDensityLOS_SmokeVolume__AEAAMAEBV__Vec3D_M__0PEAV4__Z__NAEBV4_I_std__6B_

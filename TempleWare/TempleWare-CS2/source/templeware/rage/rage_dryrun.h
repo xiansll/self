@@ -92,14 +92,22 @@ namespace RageDryRun
         int minimum_damage = 30;
         bool damage_override = false;
         int override_damage = 50;
+        int hitchance_override = 0;    // 0=disabled, >0 = override HC value
         bool penetration_crosshair = false;
+
+        // Dynamic point scale: pulls multipoints toward hitbox center
+        // proportionally to weapon inaccuracy — high inaccuracy clusters
+        // points to center (safer), low inaccuracy keeps them spread.
+        bool dynamic_point_scale = false;
+        bool debug_multipoints = false;
 
         // Planner-only features. These NEVER execute from this layer.
         bool silent_plan = false;
         bool auto_fire_plan = false;
         bool auto_scope_plan = false;
         bool auto_stop_plan = false;
-        bool force_shot_plan = false;
+        bool force_shot_air = false;
+        bool force_shot_ground = false;
         bool no_spread_plan = false;
         bool doubletap_plan = false;
 
@@ -304,6 +312,13 @@ namespace RageDryRun
         Vec3 planned_return{};
     };
 
+    struct DebugMultipoint
+    {
+        Vec3 world{};
+        int hitbox_index = 0;
+        bool is_center = false;
+    };
+
     struct DryRunActionPlan
     {
         bool target_found = false;
@@ -315,6 +330,7 @@ namespace RageDryRun
         float distance = 0.f;
         float hitchance = 0.f;
         float predicted_damage = 0.f;
+        bool force_shot_active = false;
 
         bool would_aim = false;
         bool would_silent = false;
@@ -504,9 +520,86 @@ namespace RageDryRun
     // -------------------------------------------------------------------
     namespace Eval
     {
-        // Nominal per-group base damage table (weapon group 0..5). This is an
-        // illustrative model constant, NOT a game memory read, used only when a
-        // verified live base-damage field is unavailable.
+        // Dynamic point scale: pull multipoints toward hitbox center
+        // proportionally to weapon inaccuracy (velocity approach).
+        // High inaccuracy → points cluster to center (safer shots).
+        inline void apply_dynamic_point_scale(
+            RageDryConfig& cfg,
+            const WeaponSnapshot& weapon,
+            const CandidateSnapshot* target) noexcept
+        {
+            if (!target) return;
+            const float inacc = weapon.inaccuracy + weapon.spread;
+            if (inacc <= 0.001f) return; // perfect accuracy, keep full scale
+
+            const float dist = target->distance > 1.f ? target->distance : 1.f;
+            const float hitbox_r = (cfg.prefer_body ? 18.f : 8.f) * cfg.point_scale;
+            const float effective_r = hitbox_r * 2.0f;
+            const float factor = effective_r / (inacc * dist);
+            const float probability = (factor * factor < 1.f) ? factor * factor : 1.f;
+            cfg.point_scale *= probability;
+            if (cfg.point_scale < 0.10f) cfg.point_scale = 0.10f;
+        }
+
+        // Collect debug multipoints for on-screen visualization.
+        inline void collect_debug_multipoints(
+            const RageDryConfig& cfg,
+            const CandidateSnapshot* target,
+            std::vector<DebugMultipoint>& out) noexcept
+        {
+            if (!target || !target->bones_ready) return;
+
+            // Map hitbox index to approximate bone position offsets from target origin.
+            // These are symbolic scan points, not real bone reads (those happen in ESP).
+            struct HitboxDef { int index; float dx; float dy; float dz; float radius; };
+            static const HitboxDef kHitboxes[] = {
+                { 0,  0.f,  0.f,  72.f, 4.5f },   // head
+                { 1,  0.f,  0.f,  66.f, 4.f  },   // neck
+                { 2,  0.f,  0.f,  52.f, 8.f  },   // chest
+                { 3,  0.f,  0.f,  40.f, 8.f  },   // stomach
+                { 4,  0.f,  0.f,  34.f, 6.f  },   // pelvis
+                { 5, -8.f,  0.f,  55.f, 4.f  },   // left arm
+                { 6,  8.f,  0.f,  55.f, 4.f  },   // right arm
+                { 7, -4.f,  0.f,  16.f, 4.f  },   // left leg
+                { 8,  4.f,  0.f,  16.f, 4.f  },   // right leg
+            };
+
+            // Use candidate's last known origin as base (from FOV/distance calc).
+            // Real bone positions would need the full bone array, which is in ESP.
+            // For debug visualization this approximation shows scan coverage.
+            for (const auto& hb : kHitboxes)
+            {
+                if (hb.index >= kHitboxCount || !cfg.hitboxes[hb.index])
+                    continue;
+
+                // Center point
+                DebugMultipoint center{};
+                center.world = { hb.dx, hb.dy, hb.dz };
+                center.hitbox_index = hb.index;
+                center.is_center = true;
+                out.push_back(center);
+
+                if (!cfg.multipoint) continue;
+
+                // Edge multipoints scaled by point_scale
+                const float r = hb.radius * cfg.point_scale;
+                const float offsets[][3] = {
+                    {  r, 0.f, 0.f }, { -r, 0.f, 0.f },
+                    { 0.f, r, 0.f }, { 0.f, -r, 0.f },
+                    { 0.f, 0.f, r }, { 0.f, 0.f, -r },
+                };
+                for (const auto& o : offsets)
+                {
+                    DebugMultipoint mp{};
+                    mp.world = { hb.dx + o[0], hb.dy + o[1], hb.dz + o[2] };
+                    mp.hitbox_index = hb.index;
+                    mp.is_center = false;
+                    out.push_back(mp);
+                }
+            }
+        }
+
+        // Nominal per-group base damage table (weapon group 0..5).
         inline float group_base_damage(int group) noexcept
         {
             switch (group)
@@ -535,14 +628,16 @@ namespace RageDryRun
             const CandidateSnapshot* target) noexcept
         {
             HitchanceResult r{};
-            r.required = static_cast<float>(cfg.hitchance);
+            const int effective_hc = (cfg.hitchance_override > 0)
+                ? cfg.hitchance_override : cfg.hitchance;
+            r.required = static_cast<float>(effective_hc);
 
             if (!target)
             {
                 r.state = GateState::Unknown;
                 return r;
             }
-            if (cfg.hitchance <= 0)
+            if (effective_hc <= 0)
             {
                 r.state = GateState::Pass;
                 r.chance = 100.f;
@@ -716,13 +811,21 @@ namespace RageDryRun
         inline PenetrationResult eval_penetration(Readiness trace) noexcept
         {
             PenetrationResult r{};
-            // Autowall/penetration depends on the runtime trace backend, which is
-            // BLOCKED. Never reports Pass in P7.
-            r.state = GateState::Blocked;
+            if (trace == Readiness::Ready)
+            {
+                // Trace backend is live — penetration evaluation is available.
+                // Actual per-target damage calculation happens in the runtime
+                // evaluator using Autowall::SimulateBullet with real weapon/target data.
+                // This gate only signals capability.
+                r.state = GateState::Pass;
+            }
+            else
+            {
+                r.state = GateState::Blocked;
+            }
             r.penetrated = false;
             r.surfaces = 0;
             r.predicted_damage = 0.f;
-            (void)trace;
             return r;
         }
 
@@ -878,6 +981,7 @@ namespace RageDryRun
         ReadinessMatrix readiness{};
         SelfTestReport self_test{};
         EvaluatorTestReport evaluator_tests{};
+        std::vector<DebugMultipoint> debug_points{};
 
         SourceMode source = SourceMode::None;
         int live_entity_count = 0;
@@ -898,6 +1002,7 @@ namespace RageDryRun
             candidates.clear();
             lag_records.clear();
             shoot_history.clear();
+            debug_points.clear();
 
             hitchance = {};
             penetration = {};
@@ -920,36 +1025,44 @@ namespace RageDryRun
         // game: no CUserCmd, no memory writes, execution stays disabled.
         void evaluate() noexcept
         {
-            // Failure-safe: clamp config and strip NaN/inf/duplicate candidates
-            // before anything reads them.
             config = Guards::sanitize(config);
             Guards::sanitize_candidates(candidates);
+            debug_points.clear();
 
             const CandidateSnapshot* target =
                 DecisionEngine::select_candidate(config, candidates);
 
-            // Run all evaluators (they own the result DTOs now).
-            hitchance      = Eval::eval_hitchance(config, weapon, target);
-            damage         = Eval::eval_damage(config, weapon, target);
-            stop_prediction = Eval::eval_stop(config, weapon, prediction);
-            doubletap      = Eval::eval_doubletap(config, weapon, target, has_tick_state);
-            extrapolation  = Eval::eval_extrapolation(config, prediction);
+            // Apply dynamic point scale before evaluators use it.
+            RageDryConfig eval_cfg = config;
+            if (eval_cfg.dynamic_point_scale && target)
+            {
+                Eval::apply_dynamic_point_scale(eval_cfg, weapon, target);
+            }
+
+            hitchance      = Eval::eval_hitchance(eval_cfg, weapon, target);
+            damage         = Eval::eval_damage(eval_cfg, weapon, target);
+            stop_prediction = Eval::eval_stop(eval_cfg, weapon, prediction);
+            doubletap      = Eval::eval_doubletap(eval_cfg, weapon, target, has_tick_state);
+            extrapolation  = Eval::eval_extrapolation(eval_cfg, prediction);
             penetration    = Eval::eval_penetration(readiness.trace);
-            anti_aim       = Eval::eval_antiaim(config);
-            quick_peek     = Eval::eval_quickpeek(config, frame);
+            anti_aim       = Eval::eval_antiaim(eval_cfg);
+            quick_peek     = Eval::eval_quickpeek(eval_cfg, frame);
+
+            // Collect debug multipoints for visualization.
+            if (eval_cfg.debug_multipoints && target)
+                Eval::collect_debug_multipoints(eval_cfg, target, debug_points);
 
             DryRunActionPlan out{};
             out.execution_enabled = false;
 
-            if (!config.enabled || !target)
+            if (!eval_cfg.enabled || !target)
             {
                 action = out;
                 return;
             }
 
-            // Body-aim preference: settle the hitbox the plan would use.
-            const int body_region = 2; // chest
-            out.body_hitbox = config.prefer_body ? body_region : config.primary_hitbox;
+            const int body_region = 2;
+            out.body_hitbox = eval_cfg.prefer_body ? body_region : eval_cfg.primary_hitbox;
             out.selected_hitbox = out.body_hitbox;
 
             out.target_found = true;
@@ -959,48 +1072,68 @@ namespace RageDryRun
             out.hitchance = hitchance.chance;
             out.predicted_damage = damage.predicted_damage;
 
-            // Gate provenance.
-            out.fov_pass = target->fov <= config.max_fov;
+            out.fov_pass = target->fov <= eval_cfg.max_fov;
             out.visibility_pass =
-                !config.require_visibility || (target->visibility_known && target->visible);
-            out.hitchance_pass =
-                (hitchance.state == GateState::Pass) || config.hitchance <= 0;
-            out.damage_pass =
-                (damage.state == GateState::Pass) || config.minimum_damage <= 0;
+                !eval_cfg.require_visibility || (target->visibility_known && target->visible);
 
-            // Backtrack availability for this target (read-only lag records).
+            // HC override: when set, use override value instead of base
+            const int effective_hc = (eval_cfg.hitchance_override > 0)
+                ? eval_cfg.hitchance_override : eval_cfg.hitchance;
+            out.hitchance_pass =
+                (hitchance.chance >= static_cast<float>(effective_hc)) || effective_hc <= 0;
+
+            // DMG override: when damage_override is active, the eval already
+            // used override_damage as predicted; gate uses the same threshold.
+            out.damage_pass =
+                (damage.state == GateState::Pass) || eval_cfg.minimum_damage <= 0;
+
+            // Force shot: bypass hitchance gate when weapon is at max accuracy.
+            bool at_max_accuracy = false;
+            {
+                const float spd = prediction.ready ? prediction.speed_2d : 0.f;
+                const float inacc = weapon.inaccuracy + weapon.spread;
+                if (frame.on_ground)
+                    at_max_accuracy = (spd <= (weapon.max_speed > 1.f ? weapon.max_speed * 0.34f : 85.f));
+                else
+                    at_max_accuracy = (inacc <= 0.05f);
+            }
+            bool force_shot = false;
+            if (frame.on_ground && eval_cfg.force_shot_ground && at_max_accuracy)
+                force_shot = true;
+            if (!frame.on_ground && eval_cfg.force_shot_air && at_max_accuracy)
+                force_shot = true;
+            out.force_shot_active = force_shot;
+
             int recs = 0;
             for (const auto& lr : lag_records)
                 if (lr.valid && (lr.candidate_id == target->candidate_id || lr.candidate_id < 0))
                     ++recs;
             out.backtrack_records = recs;
 
-            // would_* decisions — each bound to config AND its gate/data.
             out.would_aim = true;
-            out.would_silent = config.silent_plan;
-            out.would_scope = config.auto_scope_plan;
-            out.would_no_spread = config.no_spread_plan;
-            out.would_stop = config.auto_stop_plan && stop_prediction.would_stop;
+            out.would_silent = eval_cfg.silent_plan;
+            out.would_scope = eval_cfg.auto_scope_plan;
+            out.would_no_spread = eval_cfg.no_spread_plan;
+            out.would_stop = eval_cfg.auto_stop_plan && stop_prediction.would_stop;
             out.would_use_penetration =
-                config.penetration_crosshair && penetration.state == GateState::Pass; // Blocked -> false
-            out.would_use_backtrack = config.lagcomp_snapshots && recs > 0;
+                eval_cfg.penetration_crosshair && penetration.state == GateState::Pass;
+            out.would_use_backtrack = eval_cfg.lagcomp_snapshots && recs > 0;
             out.would_extrapolate =
-                config.extrapolation_plan && extrapolation.state == GateState::Pass;
+                eval_cfg.extrapolation_plan && extrapolation.state == GateState::Pass;
             out.would_doubletap =
-                config.doubletap_plan && doubletap.state == GateState::Pass;
+                eval_cfg.doubletap_plan && doubletap.state == GateState::Pass;
             out.would_quick_peek =
-                config.quick_peek_plan && quick_peek.state == GateState::Pass;
-            out.would_duck_peek = config.duck_peek_plan;
+                eval_cfg.quick_peek_plan && quick_peek.state == GateState::Pass;
+            out.would_duck_peek = eval_cfg.duck_peek_plan;
             out.would_anti_aim =
-                config.anti_aim_plan && anti_aim.state == GateState::Pass;
+                eval_cfg.anti_aim_plan && anti_aim.state == GateState::Pass;
 
-            // Fire only when the accuracy + damage gates both pass.
+            const bool accurate = out.hitchance_pass && out.damage_pass;
             out.would_fire =
-                config.auto_fire_plan &&
+                eval_cfg.auto_fire_plan &&
                 out.fov_pass &&
                 out.visibility_pass &&
-                out.hitchance_pass &&
-                out.damage_pass;
+                (accurate || force_shot);
 
             action = out;
         }

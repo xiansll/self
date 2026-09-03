@@ -12,6 +12,7 @@
 
 #include "rage_dryrun_providers.h"
 #include "../../trace/trace.h"
+#include "../../trace/autowall.h"
 
 #include <cstdint>
 #include <vector>
@@ -108,7 +109,7 @@ namespace RageDryRun
         inline RuntimeTraceProvider g_trace_provider{};
 
         // ===== Penetration Backend =====
-        // Gates to trace readiness. When trace is READY, penetration is READY.
+        // Real autowall: multi-surface bullet simulation via Autowall::SimulateBullet.
         class PenetrationBackend
         {
         public:
@@ -117,8 +118,9 @@ namespace RageDryRun
                 return Trace::Ready();
             }
 
-            bool eval_penetration(const float origin[3], const float target_pos[3],
-                                 std::uintptr_t skip) const noexcept
+            // Simple LOS check (no penetration simulation)
+            bool eval_visibility(const float origin[3], const float target_pos[3],
+                                std::uintptr_t skip) const noexcept
             {
                 if (!Trace::Ready()) return false;
 
@@ -126,7 +128,20 @@ namespace RageDryRun
                 float dummy_normal[3] = {};
                 float dummy_frac = 0.0f;
 
-                return Trace::Line(origin, end, skip, end, dummy_normal, &dummy_frac);
+                return !Trace::Line(origin, end, skip, end, dummy_normal, &dummy_frac);
+            }
+
+            // Full autowall simulation — returns predicted damage at target
+            Autowall::PenetrationOutput eval_penetration(
+                const Autowall::PenetrationInput& input) const noexcept
+            {
+                return Autowall::SimulateBullet(input);
+            }
+
+            // Quick damage check
+            bool can_damage(const Autowall::PenetrationInput& input) const noexcept
+            {
+                return Autowall::CanDamage(input);
             }
         };
 

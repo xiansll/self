@@ -17,6 +17,7 @@
 #include "../chams/chams.h"
 #include "../trace/trace.h"
 #include "../icons/icons.h"
+#include "../templeware/rage/rage_live_providers.h"
 
 // ---------------------------------------------------------------------------
 // Verified offsets (CS2 build 14178, cross-checked against the Antigravity
@@ -687,10 +688,11 @@ namespace Esp
         return GetEntity(index);
     }
 
-    // HUD overlay (pure ImGui): aimbot FOV circle + watermark + custom crosshair.
+    // HUD overlay (pure ImGui): aimbot FOV circle + watermark + custom crosshair + debug multipoints.
     void DrawOverlay()
     {
-        if (!g_config.watermark && !g_config.crosshair && !g_aimbot.drawFov)
+        const bool hasDebugMP = !RageDryRun::g_state.debug_points.empty();
+        if (!g_config.watermark && !g_config.crosshair && !g_aimbot.drawFov && !hasDebugMP)
             return;
 
         ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -736,6 +738,69 @@ namespace Esp
             dl->AddRect(ImVec2(x, y), ImVec2(x + ts.x + pad * 2.f, y + ts.y + pad * 1.5f), IM_COL32(40, 40, 47, 255), 6.f);
             const ImU32 wc = ImGui::ColorConvertFloat4ToU32(ImVec4(g_config.watermarkColor[0], g_config.watermarkColor[1], g_config.watermarkColor[2], g_config.watermarkColor[3]));
             dl->AddText(ImVec2(x + pad, y + pad * 0.75f), wc, buf);
+        }
+
+        // Debug multipoints: draw scan points on screen (color-coded by hitbox region)
+        if (hasDebugMP && g_viewMatrix)
+        {
+            const auto& rs = RageDryRun::g_state;
+            // Find the target candidate's pawn origin for absolute positioning
+            Vec3 targetOrigin{};
+            bool haveOrigin = false;
+            if (rs.action.target_found && rs.action.target_id >= 0)
+            {
+                for (const auto& c : rs.candidates)
+                {
+                    if (c.candidate_id == rs.action.target_id && c.pawn && IsValidPtr(c.pawn))
+                    {
+                        __try
+                        {
+                            uintptr_t sn = *reinterpret_cast<uintptr_t*>(c.pawn + 0x330);
+                            if (IsValidPtr(sn))
+                            {
+                                const float* o = reinterpret_cast<const float*>(sn + 0x80);
+                                if (std::isfinite(o[0]) && std::isfinite(o[1]) && std::isfinite(o[2]))
+                                {
+                                    targetOrigin = { o[0], o[1], o[2] };
+                                    haveOrigin = true;
+                                }
+                            }
+                        }
+                        __except (EXCEPTION_EXECUTE_HANDLER) {}
+                        break;
+                    }
+                }
+            }
+
+            if (haveOrigin)
+            {
+                for (const auto& dp : rs.debug_points)
+                {
+                    Vec3 world = { targetOrigin.x + dp.world.x,
+                                   targetOrigin.y + dp.world.y,
+                                   targetOrigin.z + dp.world.z };
+                    Vec2 scr{};
+                    if (!WorldToScreen(world, scr, *g_viewMatrix))
+                        continue;
+
+                    ImU32 col;
+                    switch (dp.hitbox_index)
+                    {
+                    case 0:  col = IM_COL32(255, 80,  80,  dp.is_center ? 255 : 160); break; // head
+                    case 1:  col = IM_COL32(255, 160, 60,  dp.is_center ? 255 : 160); break; // neck
+                    case 2:  col = IM_COL32(255, 160, 60,  dp.is_center ? 255 : 160); break; // chest
+                    case 3:  col = IM_COL32(220, 220, 60,  dp.is_center ? 255 : 160); break; // stomach
+                    case 4:  col = IM_COL32(220, 220, 60,  dp.is_center ? 255 : 160); break; // pelvis
+                    case 5:
+                    case 6:  col = IM_COL32(180, 80,  255, dp.is_center ? 255 : 160); break; // arms
+                    case 7:
+                    case 8:  col = IM_COL32(80,  160, 255, dp.is_center ? 255 : 160); break; // legs
+                    default: col = IM_COL32(200, 200, 200, dp.is_center ? 255 : 160); break;
+                    }
+                    float radius = dp.is_center ? 3.5f : 2.0f;
+                    dl->AddCircleFilled(ImVec2(scr.x, scr.y), radius, col);
+                }
+            }
         }
     }
 
@@ -1100,6 +1165,188 @@ namespace Esp
 
         g_stats.localFound = localFound;
         g_stats.localTeam = localTeam;
+
+        // Publish full live data into the rage pipeline.
+        if (localFound)
+        {
+            auto& live = RageDryRun::Live::g_live;
+            const uintptr_t clientBase = reinterpret_cast<uintptr_t>(GetModuleHandleA("client.dll"));
+
+            // --- Combat Frame ---
+            {
+                const float* vo = reinterpret_cast<const float*>(localPawn + kBaseModelEntity_m_vecViewOffset);
+                const float* vel = reinterpret_cast<const float*>(localPawn + kBaseEntity_m_vecVelocity);
+                const float* va = reinterpret_cast<const float*>(clientBase + kDw_dwViewAngles);
+                const uint32_t flags = *reinterpret_cast<const uint32_t*>(localPawn + kBaseEntity_m_fFlags);
+
+                live.frame.generation = live.generation + 1;
+                live.frame.local_pawn = localPawn;
+                live.frame.local_controller = 0;
+                live.frame.origin = RageDryRun::Vec3{ localOrigin.x, localOrigin.y, localOrigin.z };
+                live.frame.eye_position = RageDryRun::Vec3{
+                    localOrigin.x + vo[0], localOrigin.y + vo[1], localOrigin.z + vo[2] };
+                live.frame.velocity = RageDryRun::Vec3{ vel[0], vel[1], vel[2] };
+                live.frame.view_pitch = va[0];
+                live.frame.view_yaw = va[1];
+                live.frame.on_ground = (flags & 1) != 0;
+                live.frame.scoped = *reinterpret_cast<const bool*>(localPawn + kCSPlayerPawn_m_bIsScoped);
+                live.frame.tick = GetTickCount();
+                live.frame.time = static_cast<float>(live.frame.tick) / 1000.f;
+                live.frame.ready = true;
+                live.frame_ready = true;
+            }
+
+            // --- Prediction ---
+            {
+                const float* vel = reinterpret_cast<const float*>(localPawn + kBaseEntity_m_vecVelocity);
+                const uint32_t flags = *reinterpret_cast<const uint32_t*>(localPawn + kBaseEntity_m_fFlags);
+                live.prediction.generation = live.generation + 1;
+                live.prediction.origin = live.frame.origin;
+                live.prediction.velocity = RageDryRun::Vec3{ vel[0], vel[1], vel[2] };
+                live.prediction.speed_2d = std::sqrt(vel[0]*vel[0] + vel[1]*vel[1]);
+                live.prediction.on_ground = (flags & 1) != 0;
+                live.prediction.ready = true;
+                live.prediction_ready = true;
+            }
+
+            // --- Weapon ---
+            {
+                live.weapon = RageDryRun::WeaponSnapshot{};
+                const uintptr_t ws = *reinterpret_cast<uintptr_t*>(localPawn + kBasePlayerPawn_m_pWeaponServices);
+                if (IsValidPtr(ws))
+                {
+                    const uint32_t hActive = *reinterpret_cast<uint32_t*>(ws + kPlayerWeaponServices_m_hActiveWeapon);
+                    const uintptr_t weapon = GetEntity(static_cast<int>(hActive & 0x7FFF));
+                    if (weapon)
+                    {
+                        live.weapon.weapon = weapon;
+                        live.weapon.generation = live.generation + 1;
+
+                        int clip = 0, maxClip = 0;
+                        GetAmmo(localPawn, clip, maxClip);
+                        live.weapon.ammo = clip;
+
+                        const uintptr_t vdata = *reinterpret_cast<uintptr_t*>(weapon + kBaseEntity_m_nSubclassID + 0x8);
+                        if (IsValidPtr(vdata))
+                        {
+                            live.weapon.range = *reinterpret_cast<float*>(vdata + 0x838);
+                            live.weapon.item_definition = *reinterpret_cast<int32_t*>(vdata + 0x828);
+                            live.weapon.ready = true;
+                        }
+                    }
+                }
+                live.weapon_ready = live.weapon.ready;
+            }
+
+            // --- Candidates with bones, hitboxes, visibility, FOV, distance ---
+            live.candidates.clear();
+            int cid = 0;
+            int boneReadyCount = 0;
+
+            const float localEyeArr[3] = {
+                live.frame.eye_position.x,
+                live.frame.eye_position.y,
+                live.frame.eye_position.z
+            };
+
+            for (const auto& p : players)
+            {
+                if (p.team == localTeam) continue;
+
+                RageDryRun::CandidateSnapshot c{};
+                c.candidate_id = cid++;
+                c.controller = p.controller;
+                c.pawn = p.pawn;
+                c.health = p.health;
+                c.team = p.team;
+                c.valid = true;
+                c.alive = p.health > 0;
+                c.enemy = true;
+
+                // Distance
+                float dx = p.origin.x - localOrigin.x;
+                float dy = p.origin.y - localOrigin.y;
+                float dz = p.origin.z - localOrigin.z;
+                c.distance = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+                // FOV (angular distance from crosshair to target head)
+                Vec3 bones[23]{};
+                bool hasBones = GetBonePositions(p.pawn, bones, p.origin);
+                c.bones_ready = hasBones;
+                if (hasBones)
+                {
+                    ++boneReadyCount;
+                    c.hitboxes_ready = true;
+                    // Head bone for FOV calculation
+                    const Vec3& head = bones[7]; // B_HEAD
+                    if (head.x != 0.f || head.y != 0.f || head.z != 0.f)
+                    {
+                        float hdx = head.x - localEyeArr[0];
+                        float hdy = head.y - localEyeArr[1];
+                        float hdz = head.z - localEyeArr[2];
+                        float hdist = std::sqrt(hdx*hdx + hdy*hdy);
+                        float ap = -std::atan2(hdz, hdist) * 57.2957795f;
+                        float ay = std::atan2(hdy, hdx) * 57.2957795f;
+                        float dp = ap - live.frame.view_pitch;
+                        float dyw = ay - live.frame.view_yaw;
+                        while (dyw > 180.f) dyw -= 360.f;
+                        while (dyw < -180.f) dyw += 360.f;
+                        c.fov = std::sqrt(dp*dp + dyw*dyw);
+                    }
+                }
+
+                // Visibility via trace (if trace ready)
+                if (Trace::Ready() && hasBones)
+                {
+                    const Vec3& head = bones[7];
+                    if (head.x != 0.f || head.y != 0.f || head.z != 0.f)
+                    {
+                        float headArr[3] = { head.x, head.y, head.z };
+                        float endArr[3], normalArr[3];
+                        float frac = 1.f;
+                        bool blocked = Trace::Line(
+                            localEyeArr, headArr,
+                            localPawn, endArr, normalArr, &frac);
+                        c.visibility_known = true;
+                        c.visible = !blocked || frac > 0.97f;
+                    }
+                }
+
+                // Lag history recording
+                {
+                    RageDryRun::LagRecordSnapshot lr{};
+                    lr.candidate_id = c.candidate_id;
+                    lr.tick = static_cast<int>(GetTickCount());
+                    lr.simulation_time = *reinterpret_cast<const float*>(p.pawn + kBaseEntity_m_flSimulationTime);
+                    lr.origin = RageDryRun::Vec3{ p.origin.x, p.origin.y, p.origin.z };
+                    lr.valid = true;
+                    if (hasBones)
+                    {
+                        for (int bi = 1; bi < 23 && bi < 128; ++bi)
+                        {
+                            lr.bones[bi].position = RageDryRun::Vec3{
+                                bones[bi].x, bones[bi].y, bones[bi].z };
+                            lr.bones[bi].valid = (bones[bi].x != 0.f || bones[bi].y != 0.f || bones[bi].z != 0.f);
+                        }
+                    }
+                    live.lag_history.push_back(lr);
+                    RageDryRun::Live::cap_lag_history(live.lag_history);
+                }
+
+                live.candidates.push_back(c);
+            }
+
+            live.entity_count = cid;
+            live.entities_ready = cid > 0;
+            live.bones_ready = boneReadyCount > 0;
+            live.hitboxes_ready = boneReadyCount > 0;
+            live.bone_ready_count = boneReadyCount;
+            live.local_pawn = localPawn;
+            live.local_controller = 0;
+            ++live.generation;
+            ++live.publishes;
+            RageDryRun::Live::g_enabled = true;
+        }
 
         if (!localFound)
             return;

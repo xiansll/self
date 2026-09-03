@@ -18,6 +18,7 @@ extern bool g_showMenu; // defined in main.cpp (global scope)
 #include "../features/chams/chams.h"
 
 #include "../../cs2/datatypes/cutlbuffer/cutlbuffer.h"
+#include "../rage/rage_cmd_execution.h"
 #include "../../cs2/datatypes/keyvalues/keyvalues.h"
 
 #include "../../cs2/entity/C_Material/C_Material.h"
@@ -26,6 +27,7 @@ extern bool g_showMenu; // defined in main.cpp (global scope)
 #include "../config/config.h"
 #include "../interfaces/interfaces.h"
 #include "../features/aim/aim.h"
+#include "../features/aim/legit_cmd.h"
 #include "../features/movement/movement.h"
 #include "../features/rage/antiaim.h"
 #include "../features/prediction/prediction.h"
@@ -102,7 +104,7 @@ void __fastcall H::hkFrameStageNotify(void* a1, int stage)
 
 	if (stage == FRAME_RENDER_END && g_ctx->local_pawn) {
 		Esp::cache();
-		Aimbot();
+		// Aimbot() moved to CUserCmd (LegitCmd::OnCreateMove in CreateMove hook)
 	}
 }
 
@@ -159,9 +161,19 @@ void __fastcall H::hkCreateMove(CCSGOInput* rcx, int slot, bool active)
 	g_movement->OnCreateMove(user_cmd, viewAngle);
 	g_antiaim->OnCreateMove(user_cmd);
 
+	// Legit aimbot + triggerbot + RCS via CUserCmd (replaces memory writes + mouse_event)
+	LegitCmd::OnCreateMove(user_cmd, rcx);
+
 	g_prediction->Start(user_cmd);
 	{
-		// Add ur ragebot / no spread etc...
+		// Rage execution via CUserCmd (proper path — replaces memory writes)
+		const auto& plan = RageDryRun::g_state.action;
+		if (plan.execution_enabled && plan.target_found && RageDryRun::Live::g_enabled)
+		{
+			bool executed = RageDryRun::CmdExecution::execute_cmd(user_cmd, rcx, plan);
+			if (executed)
+				RageDryRun::CmdExecution::log_execution(plan);
+		}
 	}
 	g_prediction->End(user_cmd);
 

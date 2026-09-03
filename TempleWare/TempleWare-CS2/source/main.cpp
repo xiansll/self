@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <cstdio>
+#include <cstring>
 
 #include "../external/imgui/imgui.h"
 #include "../external/imgui/imgui_impl_dx11.h"
@@ -14,6 +15,7 @@
 #include "gui/gui.h"
 #include "gui/nexus_redesign.h"
 #include "trace/trace.h"
+#include "trace/autowall_debug.h"
 #include "icons/icons.h"
 #include "nerv/nerv_bridge.h"
 #include "templeware/globals/d3d11_globals.h"
@@ -28,6 +30,12 @@
 #include "templeware/compat/velocity_port_context.h"
 #include "templeware/compat/velocity_feature_integration.h"
 #include "templeware/compat/velocity_owner_bindings.h"
+#include "templeware/rage/rage_dryrun.h"
+#include "templeware/rage/rage_dryrun_providers.h"
+#include "templeware/rage/rage_live_providers.h"
+#include "templeware/rage/rage_execution.h"
+#include "templeware/rage/rage_cmd_execution.h"
+#include "templeware/hooks/hooks.h"
 
 typedef HRESULT(__stdcall* Present)(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags);
 
@@ -128,6 +136,33 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             // provider, config translator, and feature registrations.
             VelocityRageCompat::OwnerBindings::install();
 
+            // Bind live providers into the rage pipeline hub.
+            RageDryRun::Live::bind();
+            FileLog::Log("[P6LIVE] PROVIDERS BOUND, RAGE CONFIG ACTIVE");
+
+            // Initialize no-spread (lazy pattern scan for game functions).
+            RageDryRun::NoSpread::Initialize();
+
+            // Install CreateMove hook for CUserCmd-based execution
+            // (silent aim, attack via command, proper server-side angles).
+            if (I::Input)
+            {
+                using CreateMoveFn = void(__fastcall*)(CCSGOInput*, int, bool);
+                auto createMoveFunc = M::GetVFunc<CreateMoveFn>(I::Input, 5);
+                if (createMoveFunc && !H::CreateMove.IsHooked())
+                {
+                    if (H::CreateMove.Add(reinterpret_cast<void*>(createMoveFunc),
+                        reinterpret_cast<void*>(&H::hkCreateMove)))
+                        FileLog::Log("[P6CMD] CREATEMOVE HOOK INSTALLED");
+                    else
+                        FileLog::Log("[P6CMD] CREATEMOVE HOOK FAILED");
+                }
+            }
+            else
+            {
+                FileLog::Log("[P6CMD] I::Input NULL - CREATEMOVE NOT AVAILABLE");
+            }
+
             // Trace::Initialize() runs very early with the overlay. Re-run only
             // the exact existing resolver expressions after foundation init so
             // we can distinguish an early-null timing problem from a true miss.
@@ -146,6 +181,14 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             FileLog::Log(traceBuf);
         }
     }
+
+    // Throttled trace retry: 500ms intervals, 8s total cap.
+    if (foundationInit && !Trace::Ready())
+        Trace::ThrottledRetry();
+
+    // Autowall debug: read-only test, 2s throttle, logs results
+    if (foundationInit && Trace::Ready())
+        AutowallDebug::Tick();
 
     // Present is the proven-safe Phase 3 runtime validation path. The suspect
     // FrameStageNotify detour stays disabled. Phase 3C proves resolver provenance;
@@ -329,11 +372,198 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
     Esp::Draw();
     Esp::DrawOverlay();
-    Esp::UpdateAim();
-    Esp::UpdateTrigger();
+    // UpdateAim + UpdateTrigger moved to CUserCmd (LegitCmd::OnCreateMove in CreateMove hook)
     Esp::UpdateMisc();
     Esp::UpdateSkins();
     nerv_bridge::tick(g_showMenu, (void*)g_ctx->local_pawn, (void*)g_ctx->local_controller);
+
+    // --- Rage Pipeline Tick ---
+    if (foundationInit && RageDryRun::Live::g_enabled)
+    {
+        auto& rs = RageDryRun::g_state;
+        const auto& rage = Esp::g_rage;
+
+        // Rage activation check (key + mode)
+        bool rageActive = false;
+        if (rage.masterEnable)
+        {
+            if (rage.aimType == 2) rageActive = true; // Always
+            else if (rage.aimKey != 0)
+            {
+                const bool down = (GetAsyncKeyState(rage.aimKey) & 0x8000) != 0;
+                if (rage.aimType == 1) // Toggle
+                {
+                    static bool prevDown = false, toggled = false;
+                    if (down && !prevDown) toggled = !toggled;
+                    prevDown = down;
+                    rageActive = toggled;
+                }
+                else rageActive = down; // Hold
+            }
+            else rageActive = true; // no key set = always
+        }
+
+        // Detect active weapon group from local player's weapon name
+        int activeGroup = 2; // default rifle
+        {
+            HMODULE cl = GetModuleHandleA("client.dll");
+            if (cl)
+            {
+                uintptr_t cb = reinterpret_cast<uintptr_t>(cl);
+                uintptr_t lp = *reinterpret_cast<uintptr_t*>(cb + 0x23C6268);
+                if (lp >= 0x10000 && lp < 0x0000FFFFFFFFFFFFull)
+                {
+                    char wpnName[48] = {};
+                    // Read weapon name via ESP's proven path
+                    uintptr_t ws = *reinterpret_cast<uintptr_t*>(lp + 0x1208);
+                    if (ws >= 0x10000 && ws < 0x0000FFFFFFFFFFFFull)
+                    {
+                        uint32_t hAct = *reinterpret_cast<uint32_t*>(ws + 0x60);
+                        uintptr_t wpn = Esp::LookupEntity(static_cast<int>(hAct & 0x7FFF));
+                        if (wpn)
+                        {
+                            uintptr_t vd = *reinterpret_cast<uintptr_t*>(wpn + 0x380 + 0x8);
+                            if (vd >= 0x10000 && vd < 0x0000FFFFFFFFFFFFull)
+                            {
+                                const char* n = *reinterpret_cast<const char* const*>(vd + 0x720);
+                                if (n && reinterpret_cast<uintptr_t>(n) >= 0x10000)
+                                {
+                                    if (std::strncmp(n, "weapon_", 7) == 0) n += 7;
+                                    std::snprintf(wpnName, sizeof(wpnName), "%s", n);
+                                }
+                            }
+                        }
+                    }
+                    if (wpnName[0])
+                    {
+                        auto has = [&](const char* s) { return std::strstr(wpnName, s) != nullptr; };
+                        if (has("awp") || has("ssg08") || has("scar20") || has("g3sg1"))
+                            activeGroup = 4; // sniper
+                        else if (has("nova") || has("xm1014") || has("mag7") || has("sawedoff"))
+                            activeGroup = 3; // shotgun
+                        else if (has("mp9") || has("mac10") || has("mp7") || has("mp5") || has("ump45") || has("p90") || has("bizon"))
+                            activeGroup = 1; // smg
+                        else if (has("ak47") || has("m4a1") || has("aug") || has("sg556") || has("sg553") || has("galil") || has("famas"))
+                            activeGroup = 2; // rifle
+                        else if (has("negev") || has("m249"))
+                            activeGroup = 5; // lmg
+                        else if (has("knife") || has("bayonet") || has("grenade") || has("flashbang") || has("molotov") ||
+                                 has("smoke") || has("decoy") || has("incgrenade") || has("c4") || has("taser") || has("healthshot"))
+                            activeGroup = -1; // utility, don't rage
+                        else
+                            activeGroup = 0; // pistol
+                    }
+                }
+            }
+        }
+
+        // Get active group config
+        const auto& grp = (activeGroup >= 0 && activeGroup < 6) ? rage.groups[activeGroup] : rage.groups[0];
+        bool groupEnabled = rageActive && (activeGroup >= 0) && grp.enable;
+
+        // Sync GUI rage config -> pipeline config
+        rs.config.enabled = groupEnabled;
+        rs.config.auto_fire_plan = true;
+        rs.config.selection = rage.selection;
+        rs.config.max_fov = grp.maxFov;
+        rs.config.hitchance = grp.hitChance;
+        rs.config.minimum_damage = grp.minDamage;
+        rs.config.point_scale = grp.pointScale;
+        rs.config.silent_plan = grp.silent;
+        rs.config.no_spread_plan = grp.noSpread;
+        rs.config.doubletap_plan = grp.doubletap;
+        rs.config.prefer_body = grp.forceBAim;
+        rs.config.require_visibility = false;
+        rs.config.primary_hitbox = grp.hbHead ? 0 : (grp.hbChest ? 2 : (grp.hbStomach ? 3 : 0));
+        rs.config.hitboxes[0] = grp.hbHead;
+        rs.config.hitboxes[2] = grp.hbChest;
+        rs.config.hitboxes[3] = grp.hbStomach;
+        rs.config.hitboxes[5] = grp.hbArms;
+        rs.config.hitboxes[6] = grp.hbArms;
+        rs.config.hitboxes[7] = grp.hbLegs;
+        rs.config.hitboxes[8] = grp.hbLegs;
+
+        // Force shot air/ground (bind key: 0 = always when toggled, >0 = hold)
+        {
+            bool fsAirActive = grp.forceShotAir &&
+                (grp.forceShotAirKey == 0 || (GetAsyncKeyState(grp.forceShotAirKey) & 0x8000));
+            bool fsGroundActive = grp.forceShotGround &&
+                (grp.forceShotGroundKey == 0 || (GetAsyncKeyState(grp.forceShotGroundKey) & 0x8000));
+            rs.config.force_shot_air = fsAirActive;
+            rs.config.force_shot_ground = fsGroundActive;
+        }
+
+        // Overrides: when GUI value > 0 AND bind held (or bind==0), activate
+        {
+            bool hcBindHeld = grp.hitChanceOverrideKey == 0 ||
+                (GetAsyncKeyState(grp.hitChanceOverrideKey) & 0x8000);
+            rs.config.hitchance_override = (grp.hitChanceOverride > 0 && hcBindHeld)
+                ? grp.hitChanceOverride : 0;
+
+            bool dmgBindHeld = grp.minDmgOverrideKey == 0 ||
+                (GetAsyncKeyState(grp.minDmgOverrideKey) & 0x8000);
+            if (grp.minDmgOverride > 0 && dmgBindHeld)
+            {
+                rs.config.damage_override = true;
+                rs.config.override_damage = grp.minDmgOverride;
+            }
+            else
+            {
+                rs.config.damage_override = false;
+            }
+        }
+
+        // Dynamic point scale + debug multipoints
+        rs.config.dynamic_point_scale = grp.dynamicPointScale;
+        rs.config.debug_multipoints = grp.debugMultipoints;
+
+        // Publish provider snapshots into g_state
+        RageDryRun::publish_bound_snapshots();
+        rs.source = RageDryRun::SourceMode::Live;
+        rs.live_entity_count = static_cast<int>(rs.candidates.size());
+
+        // Evaluate: select target, run all evaluators, build action plan
+        rs.evaluate();
+        rs.action.execution_enabled = groupEnabled;
+
+        // Log readiness transitions
+        RageDryRun::Live::log_live_transitions();
+
+        // Log live state periodically
+        {
+            static DWORD s_lastLiveLog = 0;
+            DWORD now = GetTickCount();
+            if (now - s_lastLiveLog > 3000)
+            {
+                s_lastLiveLog = now;
+                const auto& r = rs.readiness;
+                const auto& a = rs.action;
+                char buf[512];
+                std::snprintf(buf, sizeof(buf),
+                    "[P6LIVE] READY frame=%d entities=%d bones=%d hitboxes=%d "
+                    "weapon=%d prediction=%d trace=%d pen=%d | "
+                    "target=%d hc=%.0f dmg=%.0f fire=%d exec=%d force=%d",
+                    r.combat_frame == RageDryRun::Readiness::Ready ? 1 : 0,
+                    rs.live_entity_count,
+                    r.bones == RageDryRun::Readiness::Ready ? 1 : 0,
+                    r.hitboxes == RageDryRun::Readiness::Ready ? 1 : 0,
+                    r.weapon == RageDryRun::Readiness::Ready ? 1 : 0,
+                    r.prediction == RageDryRun::Readiness::Ready ? 1 : 0,
+                    r.trace == RageDryRun::Readiness::Ready ? 1 : 0,
+                    r.penetration == RageDryRun::Readiness::Ready ? 1 : 0,
+                    a.target_found ? a.target_id : -1,
+                    a.hitchance, a.predicted_damage,
+                    a.would_fire ? 1 : 0,
+                    a.execution_enabled ? 1 : 0,
+                    a.force_shot_active ? 1 : 0);
+                FileLog::Log(buf);
+            }
+        }
+
+        // Execution moved to CreateMove hook (rage_cmd_execution.h).
+        // The present hook only evaluates; CreateMove applies the plan
+        // via CUserCmd mutation for proper silent aim and attack timing.
+    }
 
     static float g_menuAnim = 0.f;
     {

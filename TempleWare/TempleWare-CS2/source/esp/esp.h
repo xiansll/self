@@ -236,6 +236,49 @@ namespace Esp
         int  delayMs = 0;
         bool teamCheck = true;
     };
+    // Per-weapon-group rage config (6 groups)
+    // 0=Pistol 1=SMG 2=Rifle 3=Shotgun 4=Sniper 5=LMG
+    struct RageGroupCfg
+    {
+        bool  enable = true;
+        bool  silent = false;
+        bool  noSpread = false;
+        bool  doubletap = false;
+        bool  forceBAim = false;
+        bool  forceShotAir = false;
+        bool  forceShotGround = false;
+        float maxFov = 180.f;
+        int   hitChance = 0;
+        int   minDamage = 0;
+        float pointScale = 0.80f;
+        int   minDmgOverride = 0;
+        int   hitChanceOverride = 0;
+        bool  dynamicPointScale = false;
+        bool  debugMultipoints = false;
+        // Bind keys (VK code, 0 = no bind / always active when toggled)
+        int   forceShotAirKey = 0;
+        int   forceShotGroundKey = 0;
+        int   minDmgOverrideKey = 0;
+        int   hitChanceOverrideKey = 0;
+        // Hitbox multicombo flags
+        bool  hbHead = true;
+        bool  hbChest = true;
+        bool  hbStomach = true;
+        bool  hbArms = false;
+        bool  hbLegs = false;
+        bool  hbFeet = false;
+    };
+
+    struct RageCfg
+    {
+        bool  masterEnable = false;
+        int   aimKey = 0;
+        int   aimType = 2;            // 0 Hold, 1 Toggle, 2 Always
+        int   selection = 0;          // 0 FOV 1 Distance 2 Health
+        RageGroupCfg groups[6]{};     // pistol/smg/rifle/shotgun/sniper/lmg
+    };
+
+    inline RageCfg     g_rage;
     inline AimbotCfg   g_aimbot;
     inline AntiAimCfg  g_antiaim;
     inline MovementCfg g_movement;

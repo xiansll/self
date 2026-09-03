@@ -6,6 +6,7 @@
 #include "../templeware/config/config.h"
 #include "../templeware/features/skinchanger/skinchanger.h"
 #include "../templeware/rage/rage_validation.h"
+#include "../templeware/rage/rage_dryrun.h"
 
 #include "../../external/imgui/imgui.h"
 #include "../nerv/nerv_bridge.h"
@@ -796,74 +797,263 @@ namespace
     }
 
     // ---------------- AIMBOT ----------------
+    static int g_aimSub = 0;  // 0=Legit, 1=Rage
+    static int g_rageGroup = 0; // weapon group tab within Rage
+
     void PageAimbot(float x, float y, float w, float h)
     {
-        auto& a = Esp::g_aimbot;
         PageTitle(x, y, "AIMBOT");
-        Text(ImVec2(x + S(30.f), y + S(22.f)), U32(DIM), "Legit aim assistance.");
 
-        const float bodyY = y + S(58.f);
+        // Sub-tabs: Legit / Rage
+        const char* aimSubs[] = { "Legit", "Rage" };
+        float sy = y + S(22.f);
+        {
+            const float tabW = S(80.f), tabH = S(26.f), tabGap = S(6.f);
+            for (int i = 0; i < 2; ++i)
+            {
+                float tx = x + S(30.f) + (float)i * (tabW + tabGap);
+                char id[16]; std::snprintf(id, sizeof(id), "##aimsub%d", i);
+                bool hov = false;
+                if (Hit(id, ImVec2(tx, sy), ImVec2(tabW, tabH), hov)) g_aimSub = i;
+                bool act = (g_aimSub == i);
+                RectF(ImVec2(tx, sy), ImVec2(tx + tabW, sy + tabH),
+                      act ? U32(g_accent) : (hov ? IM_COL32(60,60,70,255) : IM_COL32(40,40,48,255)), S(6.f));
+                Text(ImVec2(tx + (tabW - TW(aimSubs[i])) * 0.5f, sy + S(5.f)),
+                     act ? IM_COL32(0,0,0,255) : U32(TEXT), aimSubs[i]);
+            }
+        }
+
+        const float bodyY = sy + S(36.f);
         const float gap = S(16.f);
         const float colW = (w - gap * 2.f) / 3.f;
         const float c1 = x, c2 = c1 + colW + gap, c3 = c2 + colW + gap;
 
-        // ACTIVATION (wired: Enable, Aim Key, Aim Type)
+        if (g_aimSub == 0)
         {
-            BeginCard("ACTIVATION", c1, bodyY, colW, 0);
-            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
-            ry = RowToggle("Enable", ix, ry, iw, &a.enable);
-            ry = RowKey("Aim Key", ix, ry, iw, &a.aimKey);
-            { const char* t[] = { "Hold","Toggle","Always" }; ry = RowCombo("Aim Type", ix, ry, iw, &a.aimType, t, 3); }
-            // TODO (not wired yet): Fire Key, Silent Aim
-            EndCard(ry);
+            // ====== LEGIT ======
+            auto& a = Esp::g_aimbot;
+            {
+                BeginCard("ACTIVATION", c1, bodyY, colW, 0);
+                float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+                ry = RowToggle("Enable", ix, ry, iw, &a.enable);
+                ry = RowKey("Aim Key", ix, ry, iw, &a.aimKey);
+                { const char* t[] = { "Hold","Toggle","Always" }; ry = RowCombo("Aim Type", ix, ry, iw, &a.aimType, t, 3); }
+                EndCard(ry);
+            }
+            {
+                BeginCard("TARGETING", c2, bodyY, colW, 1);
+                float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
+                ry = RowSlider("FOV", ix, ry, iw, &a.fov, 0.f, 30.f, "%.1f");
+                ry = RowToggleC("Draw FOV", ix, ry, iw, &a.drawFov, a.fovColor);
+                ry = RowSlider("Smooth", ix, ry, iw, &a.smooth, 0.f, 1.f, "%.2f");
+                EndCard(ry);
+            }
+            {
+                const float cardH = S(250.f);
+                BeginCard("HITBOX", c3, bodyY, colW, 3);
+                const float bodyH = cardH * 0.82f;
+                const float bodyW = bodyH * 0.55f;
+                DrawHumanHitbox(c3 + (colW - bodyW) * 0.5f, bodyY + (cardH - bodyH) * 0.5f, bodyW, bodyH, &a.hitbox);
+                EndCard(bodyY + cardH - S(14.f));
+            }
+            const float row2 = bodyY + S(266.f);
+            {
+                BeginCard("ACCURACY / RCS", c1, row2, colW, 2);
+                float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+                ry = RowToggle("Recoil Control System", ix, ry, iw, &a.rcs);
+                ry = RowSliderI("RCS X", ix, ry, iw, &a.rcsX, 0, 100, "%d%%");
+                ry = RowSliderI("RCS Y", ix, ry, iw, &a.rcsY, 0, 100, "%d%%");
+                EndCard(ry);
+            }
+            {
+                auto& t = Esp::g_trigger;
+                BeginCard("TRIGGERBOT", c2, row2, colW, 1);
+                float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
+                ry = RowToggle("Enable##trig", ix, ry, iw, &t.enable);
+                ry = RowToggle("Team Check", ix, ry, iw, &t.teamCheck);
+                ry = RowSliderI("Delay (ms)", ix, ry, iw, &t.delayMs, 0, 250, "%d");
+                EndCard(ry);
+            }
+            KeybindsStrip(x, row2 + S(160.f), w);
         }
-        // TARGETING (wired: FOV, Smooth)
+        else
         {
-            BeginCard("TARGETING", c2, bodyY, colW, 1);
-            float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
-            ry = RowSlider("FOV", ix, ry, iw, &a.fov, 0.f, 30.f, "%.1f");
-            ry = RowToggleC("Draw FOV", ix, ry, iw, &a.drawFov, a.fovColor);
-            ry = RowSlider("Smooth", ix, ry, iw, &a.smooth, 0.f, 1.f, "%.2f");
-            // TODO (not wired yet): Selection, Minimum Damage, Hit Chance, Multipoint
-            EndCard(ry);
-        }
-        // HITBOX (wired: clickable hitbox selection)
-        {
-            const float cardH = S(250.f);
-            BeginCard("HITBOX", c3, bodyY, colW, 3);
-            // TODO (not wired yet): Hitbox Scale, Safe Points, Prefer Body Aim
-            const float bodyH = cardH * 0.82f;
-            const float bodyW = bodyH * 0.55f;
-            DrawHumanHitbox(c3 + (colW - bodyW) * 0.5f, bodyY + (cardH - bodyH) * 0.5f, bodyW, bodyH, &a.hitbox);
-            EndCard(bodyY + cardH - S(14.f));
-        }
+            // ====== RAGE ======
+            auto& r = Esp::g_rage;
 
-        // ACCURACY / RCS (wired: Recoil Control System, RCS X, RCS Y)
-        const float row2 = bodyY + S(266.f);
-        {
-            BeginCard("ACCURACY / RCS", c1, row2, colW, 2);
-            float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
-            ry = RowToggle("Recoil Control System", ix, ry, iw, &a.rcs);
-            ry = RowSliderI("RCS X", ix, ry, iw, &a.rcsX, 0, 100, "%d%%");
-            ry = RowSliderI("RCS Y", ix, ry, iw, &a.rcsY, 0, 100, "%d%%");
-            // TODO (not wired yet): Standalone RCS, Spread Limit, Automatic Stop
-            EndCard(ry);
-        }
-        // TRIGGERBOT (wired: Enable, Team Check, Delay; key is in Keybinds)
-        {
-            auto& t = Esp::g_trigger;
-            BeginCard("TRIGGERBOT", c2, row2, colW, 1);
-            float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
-            ry = RowToggle("Enable##trig", ix, ry, iw, &t.enable);
-            ry = RowToggle("Team Check", ix, ry, iw, &t.teamCheck);
-            ry = RowSliderI("Delay (ms)", ix, ry, iw, &t.delayMs, 0, 250, "%d");
-            EndCard(ry);
-        }
+            // Master enable + key
+            {
+                BeginCard("RAGE MASTER", c1, bodyY, colW, 0);
+                float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+                ry = RowToggle("Enable##rage", ix, ry, iw, &r.masterEnable);
+                ry = RowKey("Rage Key", ix, ry, iw, &r.aimKey);
+                { const char* t[] = { "Hold","Toggle","Always" }; ry = RowCombo("Activation##rage", ix, ry, iw, &r.aimType, t, 3); }
+                { const char* t[] = { "FOV","Distance","Health" }; ry = RowCombo("Selection##rage", ix, ry, iw, &r.selection, t, 3); }
+                EndCard(ry);
+            }
 
-        // TODO (not wired yet): ANTI-AIM card.
+            // Weapon group tabs
+            const char* grpNames[] = { "Pistol","SMG","Rifle","Shotgun","Sniper","LMG" };
+            {
+                const float tabW = S(70.f), tabH = S(24.f), tabGap = S(4.f);
+                float tx0 = c2;
+                for (int i = 0; i < 6; ++i)
+                {
+                    float tx = tx0 + (float)i * (tabW + tabGap);
+                    char id[24]; std::snprintf(id, sizeof(id), "##rgrp%d", i);
+                    bool hov = false;
+                    if (Hit(id, ImVec2(tx, bodyY), ImVec2(tabW, tabH), hov)) g_rageGroup = i;
+                    bool act = (g_rageGroup == i);
+                    RectF(ImVec2(tx, bodyY), ImVec2(tx + tabW, bodyY + tabH),
+                          act ? U32(g_accent) : (hov ? IM_COL32(55,55,65,255) : IM_COL32(35,35,42,255)), S(4.f));
+                    const float tw = TW(grpNames[i]);
+                    Text(ImVec2(tx + (tabW - tw) * 0.5f, bodyY + S(4.f)),
+                         act ? IM_COL32(0,0,0,255) : U32(TEXT), grpNames[i]);
+                }
+            }
 
-        // Keybinds Overview strip (full width, bottom)
-        KeybindsStrip(x, row2 + S(160.f), w);
+            auto& g = r.groups[g_rageGroup];
+            const float grpY = bodyY + S(32.f);
+
+            // Group settings - column 1
+            {
+                char cardId[32]; std::snprintf(cardId, sizeof(cardId), "%s CONFIG", grpNames[g_rageGroup]);
+                BeginCard(cardId, c1, grpY, colW, 1);
+                float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+                ry = RowToggle("Enable##grp", ix, ry, iw, &g.enable);
+                ry = RowToggle("Silent", ix, ry, iw, &g.silent);
+                ry = RowToggle("No Spread", ix, ry, iw, &g.noSpread);
+                ry = RowToggle("Doubletap", ix, ry, iw, &g.doubletap);
+                ry = RowToggle("Force Body Aim", ix, ry, iw, &g.forceBAim);
+                ry = RowToggle("Force Shot Air", ix, ry, iw, &g.forceShotAir);
+                ry = RowKey("FS Air Bind", ix, ry, iw, &g.forceShotAirKey);
+                ry = RowToggle("Force Shot Ground", ix, ry, iw, &g.forceShotGround);
+                ry = RowKey("FS Ground Bind", ix, ry, iw, &g.forceShotGroundKey);
+                EndCard(ry);
+            }
+
+            // Group settings - column 2 (sliders)
+            {
+                BeginCard("ACCURACY", c2, grpY, colW, 2);
+                float ry = CardBodyY(); const float ix = c2 + S(16.f), iw = colW - S(32.f);
+                ry = RowSlider("Max FOV", ix, ry, iw, &g.maxFov, 0.f, 180.f, "%.0f");
+                ry = RowSliderI("Hit Chance", ix, ry, iw, &g.hitChance, 0, 100, "%d%%");
+                ry = RowSliderI("Min Damage", ix, ry, iw, &g.minDamage, 0, 120, "%d");
+                ry = RowSlider("Point Scale", ix, ry, iw, &g.pointScale, 0.f, 1.f, "%.2f");
+                ry = RowToggle("Dynamic Scale", ix, ry, iw, &g.dynamicPointScale);
+                ry = RowSliderI("Dmg Override", ix, ry, iw, &g.minDmgOverride, 0, 120, "%d");
+                ry = RowKey("Dmg OVR Bind", ix, ry, iw, &g.minDmgOverrideKey);
+                ry = RowSliderI("HC Override", ix, ry, iw, &g.hitChanceOverride, 0, 100, "%d%%");
+                ry = RowKey("HC OVR Bind", ix, ry, iw, &g.hitChanceOverrideKey);
+                EndCard(ry);
+            }
+
+            // Group settings - column 3 (hitboxes)
+            {
+                BeginCard("HITBOXES", c3, grpY, colW, 3);
+                float ry = CardBodyY(); const float ix = c3 + S(16.f), iw = colW - S(32.f);
+                ry = RowToggle("Head", ix, ry, iw, &g.hbHead);
+                ry = RowToggle("Chest", ix, ry, iw, &g.hbChest);
+                ry = RowToggle("Stomach", ix, ry, iw, &g.hbStomach);
+                ry = RowToggle("Arms", ix, ry, iw, &g.hbArms);
+                ry = RowToggle("Legs", ix, ry, iw, &g.hbLegs);
+                ry = RowToggle("Feet", ix, ry, iw, &g.hbFeet);
+                ry = RowToggle("Debug Multipoints", ix, ry, iw, &g.debugMultipoints);
+                EndCard(ry);
+            }
+
+            // ANTI-AIM card
+            const float row2 = grpY + S(300.f);
+            {
+                auto& aa = Esp::g_antiaim;
+                BeginCard("ANTI-AIM", c1, row2, colW, 4);
+                float ry = CardBodyY(); const float ix = c1 + S(16.f), iw = colW - S(32.f);
+                ry = RowToggle("Enable##aa", ix, ry, iw, &aa.enable);
+                { const char* t[] = { "Down","Up","Zero","Jitter" }; ry = RowCombo("Pitch", ix, ry, iw, &aa.pitch, t, 4); }
+                { const char* t[] = { "Jitter","Spin","Static","Random" }; ry = RowCombo("Yaw", ix, ry, iw, &aa.yaw, t, 4); }
+                ry = RowSliderI("Yaw Add", ix, ry, iw, &aa.yawAdd, -180, 180, "%d");
+                ry = RowToggle("Fake Yaw", ix, ry, iw, &aa.fakeYaw);
+                ry = RowToggle("Freestanding", ix, ry, iw, &aa.freestanding);
+                EndCard(ry);
+            }
+
+            // LIVE DIAGNOSTICS card
+            {
+                BeginCard("LIVE STATUS", c2, row2, colW, 5);
+                float ry = CardBodyY(); const float ix = c2 + S(16.f);
+                const auto& rs = RageDryRun::g_state;
+                const auto& rd = rs.readiness;
+                auto rdy = [](RageDryRun::Readiness r) -> const char* {
+                    return r == RageDryRun::Readiness::Ready ? "READY" : "OFF";
+                };
+                auto rdyCol = [](RageDryRun::Readiness r) -> ImU32 {
+                    return r == RageDryRun::Readiness::Ready ? IM_COL32(80,220,80,255) : IM_COL32(180,60,60,255);
+                };
+
+                char buf[64];
+                auto statusRow = [&](const char* label, RageDryRun::Readiness r) {
+                    std::snprintf(buf, sizeof(buf), "%s: %s", label, rdy(r));
+                    Text(ImVec2(ix, ry), rdyCol(r), buf);
+                    ry += S(18.f);
+                };
+
+                statusRow("Frame", rd.combat_frame);
+                statusRow("Entities", rd.entities);
+                statusRow("Bones", rd.bones);
+                statusRow("Hitboxes", rd.hitboxes);
+                statusRow("Weapon", rd.weapon);
+                statusRow("Prediction", rd.prediction);
+                statusRow("Trace", rd.trace);
+                statusRow("Penetration", rd.penetration);
+
+                std::snprintf(buf, sizeof(buf), "Target: %s (id=%d)",
+                    rs.action.target_found ? "YES" : "NO", rs.action.target_id);
+                Text(ImVec2(ix, ry), rs.action.target_found ? IM_COL32(80,220,80,255) : U32(DIM), buf);
+                ry += S(18.f);
+
+                std::snprintf(buf, sizeof(buf), "Execution: %s",
+                    rs.action.execution_enabled ? "ENABLED" : "OFF");
+                Text(ImVec2(ix, ry), rs.action.execution_enabled ? IM_COL32(80,220,80,255) : IM_COL32(180,60,60,255), buf);
+                ry += S(18.f);
+
+                std::snprintf(buf, sizeof(buf), "HC=%.0f%% DMG=%.0f Fire=%d",
+                    rs.action.hitchance, rs.action.predicted_damage, rs.action.would_fire ? 1 : 0);
+                Text(ImVec2(ix, ry), U32(TEXT), buf);
+                ry += S(18.f);
+
+                if (rs.action.force_shot_active)
+                {
+                    Text(ImVec2(ix, ry), IM_COL32(255, 200, 60, 255), "FORCE SHOT");
+                    ry += S(18.f);
+                }
+
+                const auto& gcfg = rs.config;
+                if (gcfg.hitchance_override > 0)
+                {
+                    std::snprintf(buf, sizeof(buf), "HC Override: %d%%", gcfg.hitchance_override);
+                    Text(ImVec2(ix, ry), IM_COL32(120, 200, 255, 255), buf);
+                    ry += S(18.f);
+                }
+                if (gcfg.damage_override)
+                {
+                    std::snprintf(buf, sizeof(buf), "DMG Override: %d", gcfg.override_damage);
+                    Text(ImVec2(ix, ry), IM_COL32(120, 200, 255, 255), buf);
+                    ry += S(18.f);
+                }
+                if (rs.action.would_no_spread)
+                {
+                    Text(ImVec2(ix, ry), IM_COL32(180, 120, 255, 255), "NO SPREAD");
+                    ry += S(18.f);
+                }
+                if (rs.action.would_doubletap)
+                {
+                    Text(ImVec2(ix, ry), IM_COL32(255, 100, 100, 255), "DOUBLETAP");
+                    ry += S(18.f);
+                }
+
+                EndCard(ry);
+            }
+        }
     }
 
     // ---------------- VISUALS (our real ESP/chams/glow) ----------------

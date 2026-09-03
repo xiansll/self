@@ -137,8 +137,20 @@ namespace Trace
     bool DiagnoseAndRetryExistingResolvers()
     {
         const bool clientLoaded = GetModuleHandleA("client.dll") != nullptr;
+
+        // Actually retry TraceShape resolution if it failed during early OnInit
+        std::uintptr_t traceShape = GetResolvedTraceShapeAddress();
+        if (!traceShape && clientLoaded) {
+            auto* functions = GetFunctionList();
+            if (functions) {
+                functions->IGamePhysicsQuery_TraceShape.Search(true);
+                traceShape = GetResolvedTraceShapeAddress();
+                if (traceShape)
+                    LogLine("retry: TraceShape re-resolved successfully");
+            }
+        }
+
         auto* pPhysicsWorld = SDK::Pointers::CVPhys2World();
-        const std::uintptr_t traceShape = GetResolvedTraceShapeAddress();
 
         g_ready = clientLoaded && pPhysicsWorld && *pPhysicsWorld && traceShape;
 
@@ -180,6 +192,52 @@ namespace Trace
     ResolverDiagnostics GetResolverDiagnostics()
     {
         return g_lastDiagnostics;
+    }
+
+    bool ThrottledRetry()
+    {
+        if (g_ready) return true;
+
+        static DWORD s_firstCallTick = 0;
+        static DWORD s_lastRetryTick = 0;
+        static bool  s_exhausted = false;
+        static int   s_retryCount = 0;
+
+        if (s_exhausted) return false;
+
+        const DWORD now = GetTickCount();
+
+        if (s_firstCallTick == 0) s_firstCallTick = now;
+
+        // 8-second total wall-clock cap
+        if (now - s_firstCallTick > 8000) {
+            s_exhausted = true;
+            char b[128];
+            std::snprintf(b, sizeof(b),
+                "retry exhausted after %d attempts over %lu ms",
+                s_retryCount, (unsigned long)(now - s_firstCallTick));
+            LogLine(b);
+            return false;
+        }
+
+        // 500ms throttle between attempts
+        if (s_lastRetryTick != 0 && (now - s_lastRetryTick) < 500)
+            return false;
+
+        s_lastRetryTick = now;
+        ++s_retryCount;
+
+        const bool result = DiagnoseAndRetryExistingResolvers();
+
+        if (result) {
+            char b[128];
+            std::snprintf(b, sizeof(b),
+                "deferred ready after %d retries (%lu ms)",
+                s_retryCount, (unsigned long)(now - s_firstCallTick));
+            LogLine(b);
+        }
+
+        return result;
     }
 
     bool IsVisible(const float start[3], const float end[3], uintptr_t target, uintptr_t skip)
